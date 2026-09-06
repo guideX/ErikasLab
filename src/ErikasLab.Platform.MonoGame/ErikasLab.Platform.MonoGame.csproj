@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows7.0</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <AssemblyName>ErikasLab.Platform.MonoGame</AssemblyName>
+    <RootNamespace>ErikasLab.Platform.MonoGame</RootNamespace>
+    <ApplicationIcon />
+    <StartupObject>ErikasLab.Platform.MonoGame.Program</StartupObject>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\ErikasLab.Engine\ErikasLab.Engine.csproj" />
+    <ProjectReference Include="..\ErikasLab.Game\ErikasLab.Game.csproj" />
+    <PackageReference Include="MonoGame.Framework.WindowsDX" Version="3.8.4.1" />
+  </ItemGroup>
+
+  <!--
+    MonoGame 3.8.4.1 has legacy .NET Core 2.1 host assets as transitive NuGet
+    dependencies. They are not needed by this framework-dependent .NET 8 app
+    and would shadow the installed .NET 8 host when launching the apphost exe.
+  -->
+  <Target Name="RemoveLegacyCoreHostFilesFromBuild" AfterTargets="Build">
+    <Delete Files="$(TargetDir)hostfxr.dll;$(TargetDir)hostpolicy.dll" />
+  </Target>
+
+  <Target Name="RemoveLegacyCoreHostFilesFromPublish" AfterTargets="Publish">
+    <Delete Files="$(PublishDir)hostfxr.dll;$(PublishDir)hostpolicy.dll" />
+  </Target>
+</Project>

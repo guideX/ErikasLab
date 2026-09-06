@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>ErikasLab.Game</AssemblyName>
+    <RootNamespace>ErikasLab.Game</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\ErikasLab.Engine\ErikasLab.Engine.csproj" />
+  </ItemGroup>
+</Project>
