@@ -24,3 +24,7 @@ TestResults/
 # mixamo-mini tree next to the project. Both regenerate via `dotnet build`.
 src/ErikasLab.Platform.MonoGame/Content/erika/
 **/mixamo-mini/
+
+# Custom content-pipeline build product loaded by MGCB (see README).
+# Regenerates via `dotnet build` through the platform project reference.
+BuildTools/

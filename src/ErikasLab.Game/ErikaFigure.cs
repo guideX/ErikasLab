@@ -54,6 +54,12 @@ public static class ErikaFigure
 
     public static ModelAssetId AssetId => new("erika/idle_looking_around");
 
+    /// <summary>Phase 2C animation artifact built from the same source.</summary>
+    public static ModelAssetId ClipAssetId => new("erika/erika_idle");
+
+    /// <summary>Bone carrying the clip's root translation (importer form).</summary>
+    public const string HipsBoneName = "mixamorig:Hips";
+
     public static ModelInstance CreateInstance() =>
         new(AssetId, new Transform(GroundPosition, Quaternion.Identity, Vector3.One));
 }

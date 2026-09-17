@@ -16,6 +16,10 @@
   <ItemGroup>
     <ProjectReference Include="..\ErikasLab.Engine\ErikasLab.Engine.csproj" />
     <ProjectReference Include="..\ErikasLab.Game\ErikasLab.Game.csproj" />
+    <!-- Build-order only: the pipeline DLL is loaded by MGCB, never referenced. -->
+    <ProjectReference Include="..\ErikasLab.Content.Pipeline\ErikasLab.Content.Pipeline.csproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
     <PackageReference Include="MonoGame.Framework.WindowsDX" Version="3.8.4.1" />
     <!-- Same-version content pipeline: builds Content/Content.mgcb during `dotnet build`.
          Requires the local ignored erika/ source asset (see README.md). -->
@@ -45,8 +49,10 @@
     output dir. The stock FbxImporter names texture assets relative to the
     .mgcb working directory (e.g. ../../../home/app/...), so their .xnbs land
     under src/home/. MonoGame title storage strips '..' segments, so at
-    runtime those resolve under Content/home/app/...; both trees are staged
-    accordingly. All repo-relative; everything under bin/ stays ignored.
+    runtime those resolve under Content/home/app/.... The custom processor
+    additionally emits erika_idle.bin (skeleton + clip) into the MGCB output
+    dir. All three are staged into the app Content/ tree below.
+    All repo-relative; everything under bin/ stays ignored.
   -->
   <Target Name="StageErikaModel" AfterTargets="RunContentBuilder">
     <ItemGroup>
@@ -55,6 +61,10 @@
     <Copy
       SourceFiles="Content\erika\idle_looking_around.xnb"
       DestinationFiles="$(TargetDir)Content\erika\idle_looking_around.xnb"
+      SkipUnchangedFiles="true" />
+    <Copy
+      SourceFiles="Content\bin\Windows\Content\erika_idle.bin"
+      DestinationFiles="$(TargetDir)Content\erika\erika_idle.bin"
       SkipUnchangedFiles="true" />
     <Copy
       SourceFiles="@(ErikaTextureXnb)"

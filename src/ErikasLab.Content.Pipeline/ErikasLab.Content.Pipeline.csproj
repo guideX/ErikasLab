@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>ErikasLab.Content.Pipeline</AssemblyName>
+    <RootNamespace>ErikasLab.Content.Pipeline</RootNamespace>
+    <!-- Fixed location so Content.mgcb can /reference this build product. -->
+    <OutputPath>..\..\BuildTools\ErikaPipeline\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ErikasLab.Engine\ErikasLab.Engine.csproj" />
+    <!-- Same-version pipeline assemblies from the local MGCB tool distribution
+         (no NuGet package exists for these); resolved offline via the package cache. -->
+    <Reference Include="MonoGame.Framework.Content.Pipeline">
+      <HintPath>$(NuGetPackageRoot)dotnet-mgcb/3.8.4.1/tools/net8.0/any/MonoGame.Framework.Content.Pipeline.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="MonoGame.Framework">
+      <HintPath>$(NuGetPackageRoot)dotnet-mgcb/3.8.4.1/tools/net8.0/any/MonoGame.Framework.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

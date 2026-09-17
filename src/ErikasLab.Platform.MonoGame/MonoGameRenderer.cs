@@ -10,12 +10,12 @@ internal sealed class MonoGameRenderer : IRenderer
     private readonly GraphicsDevice _graphicsDevice;
     private readonly BasicEffect _effect;
     private readonly RasterizerState _rasterizerState;
-    private readonly StaticModelRenderer? _modelRenderer;
+    private readonly AnimatedModelRenderer? _modelRenderer;
     private readonly Dictionary<MeshData, GpuMesh> _meshCache = new();
     private bool _disposed;
     private RendererInfo _info;
 
-    public MonoGameRenderer(GraphicsDevice graphicsDevice, StaticModelRenderer? modelRenderer = null)
+    public MonoGameRenderer(GraphicsDevice graphicsDevice, AnimatedModelRenderer? modelRenderer = null)
     {
         _graphicsDevice = graphicsDevice ?? throw new ArgumentNullException(nameof(graphicsDevice));
         _modelRenderer = modelRenderer;

@@ -10,12 +10,16 @@
 
 #-------------------------------- References --------------------------------#
 
+/reference:../../../BuildTools/ErikaPipeline/ErikasLab.Content.Pipeline.dll
+
 #---------------------------------- Content ---------------------------------#
 
 # The canonical Erika source FBX lives outside the repo in the ignored local
 # directory D:\dev\ErikasLab\erika (see README.md). Only the single Phase 2B
 # static-render source is referenced here; never add the whole library.
+# The custom processor emits the stock Model plus an erika_idle.bin
+# animation sidecar (skeleton + Take 001 clip).
 #begin idle_looking_around
 /importer:FbxImporter
-/processor:ModelProcessor
+/processor:ErikaModelProcessor
 /build:../../../erika/idle_looking_around.fbx
