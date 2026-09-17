@@ -8,6 +8,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ErikasLab.Game", "src\Erika
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ErikasLab.Platform.MonoGame", "src\ErikasLab.Platform.MonoGame\ErikasLab.Platform.MonoGame.csproj", "{A2DE6A2A-15C1-4A4C-BE9E-2B0E0C63C9F9}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ErikasLab.Engine.Tests", "src\ErikasLab.Engine.Tests\ErikasLab.Engine.Tests.csproj", "{398CF596-DB0F-42F7-84F9-178EBF40B936}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -26,6 +28,10 @@ Global
 		{A2DE6A2A-15C1-4A4C-BE9E-2B0E0C63C9F9}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A2DE6A2A-15C1-4A4C-BE9E-2B0E0C63C9F9}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A2DE6A2A-15C1-4A4C-BE9E-2B0E0C63C9F9}.Release|Any CPU.Build.0 = Release|Any CPU
+		{398CF596-DB0F-42F7-84F9-178EBF40B936}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{398CF596-DB0F-42F7-84F9-178EBF40B936}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{398CF596-DB0F-42F7-84F9-178EBF40B936}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{398CF596-DB0F-42F7-84F9-178EBF40B936}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

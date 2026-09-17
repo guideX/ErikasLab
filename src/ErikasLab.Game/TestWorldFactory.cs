@@ -20,6 +20,9 @@ internal static class TestWorldFactory
         AddBox(scene, "Floating Violet Cube", new Vector3(3.5f, 4, -7), new Vector3(1.5f, 1.5f, 1.5f), ColorRgba.Violet);
         AddBox(scene, "Far Teal Tower", new Vector3(-6, 2, -21), new Vector3(2.5f, 4, 2.5f), ColorRgba.Teal);
 
+        // Canonical Erika (static Phase 2B figure; platform resolves the asset).
+        scene.AddModel(ErikaFigure.CreateInstance());
+
         return scene;
     }
 

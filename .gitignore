@@ -18,3 +18,9 @@ TestResults/
 
 # Large source assets supplied outside Phase 1
 /erika/
+
+# MGCB build exhaust for the out-of-tree canonical Erika source (see README):
+# the model .xnb lands next to Content.mgcb and texture .xnbs land under a
+# mixamo-mini tree next to the project. Both regenerate via `dotnet build`.
+src/ErikasLab.Platform.MonoGame/Content/erika/
+**/mixamo-mini/

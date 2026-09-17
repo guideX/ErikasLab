@@ -1,0 +1,21 @@
+#----------------------------- Global Properties ----------------------------#
+
+# NOTE: /outputDir and /intermediateDir are intentionally NOT set here. The
+# MonoGame.Content.Builder.Task build task supplies them on the MGCB command
+# line so built content lands where the task can copy it to the app output.
+/platform:Windows
+/config:
+/profile:HiDef
+/compress:False
+
+#-------------------------------- References --------------------------------#
+
+#---------------------------------- Content ---------------------------------#
+
+# The canonical Erika source FBX lives outside the repo in the ignored local
+# directory D:\dev\ErikasLab\erika (see README.md). Only the single Phase 2B
+# static-render source is referenced here; never add the whole library.
+#begin idle_looking_around
+/importer:FbxImporter
+/processor:ModelProcessor
+/build:../../../erika/idle_looking_around.fbx

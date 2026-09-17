@@ -8,11 +8,21 @@
     <RootNamespace>ErikasLab.Platform.MonoGame</RootNamespace>
     <ApplicationIcon />
     <StartupObject>ErikasLab.Platform.MonoGame.Program</StartupObject>
+    <!-- Run MGCB through the dotnet-mgcb dll from the NuGet package cache (same
+         version as MonoGame.Content.Builder.Task) so `dotnet build` compiles
+         Content.mgcb without a dotnet-tool manifest or a global tool install. -->
+    <MGCBCommand>$(NuGetPackageRoot)dotnet-mgcb/3.8.4.1/tools/net8.0/any/mgcb.dll</MGCBCommand>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\ErikasLab.Engine\ErikasLab.Engine.csproj" />
     <ProjectReference Include="..\ErikasLab.Game\ErikasLab.Game.csproj" />
     <PackageReference Include="MonoGame.Framework.WindowsDX" Version="3.8.4.1" />
+    <!-- Same-version content pipeline: builds Content/Content.mgcb during `dotnet build`.
+         Requires the local ignored erika/ source asset (see README.md). -->
+    <PackageReference Include="MonoGame.Content.Builder.Task" Version="3.8.4.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <MonoGameContentReference Include="Content\Content.mgcb" />
   </ItemGroup>
 
   <!--
@@ -26,5 +36,29 @@
 
   <Target Name="RemoveLegacyCoreHostFilesFromPublish" AfterTargets="Publish">
     <Delete Files="$(PublishDir)hostfxr.dll;$(PublishDir)hostpolicy.dll" />
+  </Target>
+
+  <!--
+    MGCB normalizes the out-of-tree canonical source path
+    (Content/../../../erika/...) so the model .xnb lands at
+    Content/erika/idle_looking_around.xnb instead of the task's content
+    output dir. The stock FbxImporter names texture assets relative to the
+    .mgcb working directory (e.g. ../../../home/app/...), so their .xnbs land
+    under src/home/. MonoGame title storage strips '..' segments, so at
+    runtime those resolve under Content/home/app/...; both trees are staged
+    accordingly. All repo-relative; everything under bin/ stays ignored.
+  -->
+  <Target Name="StageErikaModel" AfterTargets="RunContentBuilder">
+    <ItemGroup>
+      <ErikaTextureXnb Include="..\home\app\mixamo-mini\tmp\**\*.xnb" />
+    </ItemGroup>
+    <Copy
+      SourceFiles="Content\erika\idle_looking_around.xnb"
+      DestinationFiles="$(TargetDir)Content\erika\idle_looking_around.xnb"
+      SkipUnchangedFiles="true" />
+    <Copy
+      SourceFiles="@(ErikaTextureXnb)"
+      DestinationFiles="@(ErikaTextureXnb->'$(TargetDir)Content\home\app\mixamo-mini\tmp\%(RecursiveDir)%(Filename)%(Extension)')"
+      SkipUnchangedFiles="true" />
   </Target>
 </Project>

@@ -12,6 +12,8 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
     private GameSession? _gameSession;
     private MonoGameInputSource? _inputSource;
     private MonoGameRenderer? _renderer;
+    private ModelLibrary? _modelLibrary;
+    private StaticModelRenderer? _modelRenderer;
 
     public ErikasLabHost()
     {
@@ -39,7 +41,9 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
 
     protected override void LoadContent()
     {
-        _renderer = new MonoGameRenderer(GraphicsDevice);
+        _modelLibrary = new ModelLibrary(Content);
+        _modelRenderer = new StaticModelRenderer(_modelLibrary);
+        _renderer = new MonoGameRenderer(GraphicsDevice, _modelRenderer);
         _inputSource = new MonoGameInputSource(Window);
         _gameSession = new GameSession();
         _gameSession.Resize(GraphicsDevice.Viewport.Width, GraphicsDevice.Viewport.Height);
@@ -49,7 +53,21 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
         Console.WriteLine($"Backbuffer: {rendererInfo.BackbufferWidth}x{rendererInfo.BackbufferHeight}");
         Console.WriteLine($"Renderer backend: {rendererInfo.BackendName}");
         Console.WriteLine("Engine initialization: successful");
-        Console.WriteLine($"Scene creation: successful ({_gameSession.World.Objects.Count} objects)");
+        Console.WriteLine($"Scene creation: successful ({_gameSession.World.Objects.Count} objects, {_gameSession.World.Models.Count} models)");
+
+        try
+        {
+            foreach (var line in _modelRenderer.Diagnostics(_gameSession.World))
+            {
+                Console.WriteLine(line);
+            }
+        }
+        catch (ErikaContentException ex)
+        {
+            Console.WriteLine($"Erika content failed: {ex.Message}");
+            throw;
+        }
+
         Console.WriteLine("Controls: W/A/S/D move, mouse or arrow keys look, Escape exits");
     }
 
@@ -88,6 +106,7 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
         if (disposing)
         {
             _renderer?.Dispose();
+            _modelLibrary?.Dispose();
         }
 
         base.Dispose(disposing);

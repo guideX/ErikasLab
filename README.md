@@ -10,9 +10,10 @@ The current platform implementation is MonoGame using its Windows DirectX backen
 ErikasLab.Platform.MonoGame  Windows executable, MonoGame WindowsDX host
         ├── ErikasLab.Game   Phase 1 world/session and game-specific behavior
         └── ErikasLab.Engine Portable timing, input, camera, scene, mesh, renderer contracts
+ErikasLab.Engine.Tests       Portable xUnit tests (no GPU, no MonoGame)
 ```
 
-`ErikasLab.Engine` and `ErikasLab.Game` target `net8.0` and use `System.Numerics` plus project-owned data types. `ErikasLab.Platform.MonoGame` targets `net8.0-windows7.0`, references `MonoGame.Framework.WindowsDX` 3.8.4.1, and adapts the portable scene data to MonoGame vertex/index buffers and `BasicEffect`.
+`ErikasLab.Engine` and `ErikasLab.Game` target `net8.0` and use `System.Numerics` plus project-owned data types. `ErikasLab.Platform.MonoGame` targets `net8.0-windows7.0`, references `MonoGame.Framework.WindowsDX` 3.8.4.1 (plus the same-version `MonoGame.Content.Builder.Task` for content builds), and adapts the portable scene data to MonoGame vertex/index buffers, `BasicEffect`, and loaded `Model` assets.
 
 ## Prerequisites
 
@@ -54,11 +55,59 @@ Movement is driven by portable `FrameTime.DeltaSeconds`, so it is not frame-rate
 - Delta-time camera movement, mouse/keyboard look, resizable backbuffer projection updates, and startup diagnostics
 - Clean restore/build with warnings treated as errors
 
-Meshes are generated in code for this proof scene, so no content pipeline assets are required yet.
+Phase 2B adds: stock-pipeline import of canonical Erika as a static textured
+model in the test world (portable `ModelAssetId`/`ModelInstance` boundary,
+measured scale/orientation/grounding, startup model diagnostics), plus portable
+engine tests. It also fixes the ground-plane triangle winding, which had the
+Phase 1 ground silently back-face-culled.
+
+Meshes are generated in code for the proof scene, and canonical Erika arrives through the content pipeline described below, so no manual asset authoring is required yet.
+
+## Erika content (Phase 2B)
+
+Canonical static model: `erika/idle_looking_around.fbx` — a base Erika export
+(near-neutral standing, 67-bone skeleton, geometry-identical to the other base
+files per `docs/ERIKA_ASSET_AUDIT.md`). The local `erika/` directory stays
+git-ignored and its FBX files are never modified; only this one file is
+referenced by `src/ErikasLab.Platform.MonoGame/Content/Content.mgcb`.
+
+One-time machine setup (the FBX embeds textures but records dead workstation
+paths, which stock MonoGame follows instead of the embedded blobs):
+
+```powershell
+python tools/extract_erika_textures.py
+```
+
+This extracts the 5 canonical PNGs, read-only, to the absolute location the
+importer demands (`<repo-drive>:\home\app\mixamo-mini\tmp\skins_<guid>.fbm\`).
+After that, `dotnet build` compiles the model with the stock `FbxImporter` +
+`ModelProcessor` (4 meshes, 4 parts, 72 runtime bones, `BasicEffect` with
+diffuse textures, skinning channels preserved) and stages the `.xnb` files into
+the app output. No `dotnet-mgcb` tool install is needed: the build drives the
+`dotnet-mgcb` DLL from the NuGet cache via the `MGCBCommand` property.
+(`OpenAssetImporter` was tried and rejected: its output references
+pipeline-only material types the runtime cannot deserialize.)
+
+Conventions (single explicit conversion, centralized in `ErikaFigure` /
+`ModelPlacement`; the FBX-to-world correction lives only in the platform
+`StaticModelRenderer`):
+
+- 1 game world unit = 1 meter. True bind-pose height 180.1 FBX units maps to
+  1.70 m (x0.00944); runtime mesh bounding spheres inflate the height (~238
+  units), so they are diagnostics-only.
+- Import faces +Z (verified from bind-pose eyes-vs-head); yaw correction is 0.
+- Feet rest on the ground plane via the measured lower bound (-0.6 units).
+- Rendered pose is the imported default (bind-ish arms-out) pose. Animation
+  time is never advanced: there is no clip playback, no state machine, and no
+  custom animation processor yet — that is the explicit next phase (2C).
+
+If content is missing at startup, the app fails fast naming the expected asset
+and the restore steps above instead of surfacing a bare `ContentLoadException`.
+
 
 ## Deferred work
 
-Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, character animation, Erika, production content, save/load, and a larger renderer/content system are intentionally deferred. The existing untracked `erika/` FBX asset directory is preserved locally and ignored from this bootstrap commit until an explicit asset-import phase.
+Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, character animation playback, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now renders statically via the ignored local `erika/` source directory (see "Erika content" above); the remaining 36 FBX files await the animation phase.
 
 ## Repository hygiene
 

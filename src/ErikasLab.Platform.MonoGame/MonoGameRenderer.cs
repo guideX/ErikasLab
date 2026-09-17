@@ -10,13 +10,15 @@ internal sealed class MonoGameRenderer : IRenderer
     private readonly GraphicsDevice _graphicsDevice;
     private readonly BasicEffect _effect;
     private readonly RasterizerState _rasterizerState;
+    private readonly StaticModelRenderer? _modelRenderer;
     private readonly Dictionary<MeshData, GpuMesh> _meshCache = new();
     private bool _disposed;
     private RendererInfo _info;
 
-    public MonoGameRenderer(GraphicsDevice graphicsDevice)
+    public MonoGameRenderer(GraphicsDevice graphicsDevice, StaticModelRenderer? modelRenderer = null)
     {
         _graphicsDevice = graphicsDevice ?? throw new ArgumentNullException(nameof(graphicsDevice));
+        _modelRenderer = modelRenderer;
         _effect = new BasicEffect(graphicsDevice)
         {
             LightingEnabled = true,
@@ -85,6 +87,8 @@ internal sealed class MonoGameRenderer : IRenderer
                 _graphicsDevice.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, gpuMesh.PrimitiveCount);
             }
         }
+
+        _modelRenderer?.Draw(scene, _effect.View, _effect.Projection);
     }
 
     public void Dispose()

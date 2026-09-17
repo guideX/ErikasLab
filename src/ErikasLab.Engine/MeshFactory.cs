@@ -20,7 +20,10 @@ public static class MeshFactory
             new MeshVertex(new Vector3(halfSize, 0, -halfSize), Vector3.UnitY, color),
         };
 
-        return new MeshData(vertices, [0, 1, 2, 0, 2, 3]);
+        // Winding is clockwise-on-screen (MonoGame DirectX front-face convention
+        // with back-face culling); the previous counter-clockwise order was
+        // silently culled, so the Phase 1 ground never rendered.
+        return new MeshData(vertices, [0, 2, 1, 0, 3, 2]);
     }
 
     public static MeshData CreateBox(Vector3 size, ColorRgba color)

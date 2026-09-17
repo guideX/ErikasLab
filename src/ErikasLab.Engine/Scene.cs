@@ -3,13 +3,22 @@ namespace ErikasLab.Engine;
 public sealed class Scene
 {
     private readonly List<SceneObject> _objects = [];
+    private readonly List<ModelInstance> _models = [];
 
     public IReadOnlyList<SceneObject> Objects => _objects;
+
+    public IReadOnlyList<ModelInstance> Models => _models;
 
     public void Add(SceneObject sceneObject)
     {
         ArgumentNullException.ThrowIfNull(sceneObject);
         _objects.Add(sceneObject);
+    }
+
+    public void AddModel(ModelInstance model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        _models.Add(model);
     }
 }
 
