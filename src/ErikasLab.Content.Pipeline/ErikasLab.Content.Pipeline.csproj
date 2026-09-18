@@ -21,6 +21,15 @@
       <HintPath>$(NuGetPackageRoot)dotnet-mgcb/3.8.4.1/tools/net8.0/any/MonoGame.Framework.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- AssimpNetter from the same MGCB distribution: used to read raw FBX
+         animation (full parent-relative locals incl. FBX pivots). Stock
+         MonoGame AnimationContent strips joint orientation (e.g. UpLeg
+         180 deg -> 25 deg), producing unusable clips; raw Assimp preserves
+         correct full locals (UpLeg 168 deg ~= bind 180 deg). -->
+    <Reference Include="AssimpNetter">
+      <HintPath>$(NuGetPackageRoot)dotnet-mgcb/3.8.4.1/tools/net8.0/any/AssimpNetter.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
 </Project>

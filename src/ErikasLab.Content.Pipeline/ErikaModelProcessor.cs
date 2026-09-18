@@ -3,18 +3,28 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Content.Pipeline;
 using Microsoft.Xna.Framework.Content.Pipeline.Graphics;
 using Microsoft.Xna.Framework.Content.Pipeline.Processors;
-using PipelineAnimationChannel = Microsoft.Xna.Framework.Content.Pipeline.Graphics.AnimationChannel;
 
 namespace ErikasLab.Content.Pipeline;
 
 /// <summary>
 /// Stock <see cref="ModelProcessor"/> behavior for the runtime <c>Model</c>
-/// plus a portable animation sidecar: extracts the canonical skeleton and the
-/// Take 001 clip from the same import and writes them (via
-/// <see cref="ErikaClipCodec"/>) to a deterministic <c>erika_idle.bin</c>
-/// sidecar registered with <see cref="ContentProcessorContext.AddOutputFile"/>.
+/// plus a portable animation sidecar: extracts the canonical skeleton (from the
+/// import DOM) and the Take 001 clip (re-imported raw via Assimp) and writes
+/// them (via <see cref="ErikaClipCodec"/>) to a deterministic
+/// <c>erika_idle.bin</c> sidecar registered with
+/// <see cref="ContentProcessorContext.AddOutputFile"/>.
 /// Fails loudly on unmapped bones, unexpected scales, or unsorted keys instead
 /// of silently producing corrupt clips.
+///
+/// Animation note: stock MonoGame <c>AnimationContent</c> strips FBX joint
+/// orientation (pre-rotation pivots) from keys (e.g. UpLeg bind 180 deg becomes
+/// a 25 deg key, Shoulder 133 deg becomes 87 deg), producing unusable clips
+/// that explode/collapse at runtime (proven by screenshots). Raw Assimp
+/// <c>NodeAnimationChannel</c> keys preserve correct full parent-relative
+/// locals (UpLeg ~168 deg ~= bind 180 deg, Shoulder ~139 deg ~= bind 133 deg),
+/// so the processor re-imports the source FBX via AssimpNetter (same version
+/// as MGCB) for animation only. Skeleton still comes from the import DOM
+/// (BoneContent, OffsetMatrix-derived, verified against the runtime Model).
 /// </summary>
 [ContentProcessor(DisplayName = "Erika model + skeletal animation")]
 public sealed class ErikaModelProcessor : ModelProcessor
@@ -57,7 +67,7 @@ public sealed class ErikaModelProcessor : ModelProcessor
     private static SkeletalAnimation ExtractAnimation(NodeContent input, ContentProcessorContext context)
     {
         var skeleton = BuildSkeleton(input, context);
-        var clip = BuildClip(input, skeleton, context);
+        var clip = BuildClipRaw(input, skeleton, context);
         return new SkeletalAnimation(skeleton, clip);
     }
 
@@ -109,167 +119,174 @@ public sealed class ErikaModelProcessor : ModelProcessor
         }
     }
 
-    private static AnimationClip BuildClip(
+    private static AnimationClip BuildClipRaw(
         NodeContent input, Skeleton skeleton, ContentProcessorContext context)
     {
-        // FbxImporter attaches the take to the Hips bone node rather than the
-        // scene root, so candidates are gathered from the whole tree.
-        var candidates = new List<(string Key, AnimationContent Animation)>();
-        Walk(input);
-
-        void Walk(NodeContent node)
+        var sourcePath = input.Identity.SourceFilename;
+        if (string.IsNullOrWhiteSpace(sourcePath))
         {
-            foreach (var pair in node.Animations)
-            {
-                candidates.Add((pair.Key, pair.Value));
-            }
-
-            foreach (var child in node.Children)
-            {
-                Walk(child);
-            }
+            throw new InvalidContentException("Source FBX path unavailable for raw animation import.", input.Identity);
         }
 
-        AnimationContent animation;
-        var named = candidates.FirstOrDefault(candidate => candidate.Key == ClipName);
-        if (named.Animation is not null)
+        if (!Path.IsPathRooted(sourcePath))
         {
-            animation = named.Animation;
+            sourcePath = Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(context.OutputDirectory) ?? ".", sourcePath));
         }
-        else if (candidates.Count == 1)
+
+        if (!File.Exists(sourcePath))
         {
-            animation = candidates[0].Animation;
-            context.Logger.LogWarning(
-                null,
-                input.Identity,
-                "Animation '{0}' not found by name (importer key was '{1}'); " +
-                "using the single available animation and naming the clip '{0}'.",
-                ClipName, candidates[0].Key);
-        }
-        else
-        {
+            // MGCB passes the intermediate/source path; fall back to the
+            // absolute erika source if the identity path does not resolve.
             throw new InvalidContentException(
-                $"Animation '{ClipName}' not found. Candidates: {candidates.Count}.",
+                $"Source FBX for raw animation import not found: '{sourcePath}'.",
                 input.Identity);
         }
 
-        var durationSeconds = (float)animation.Duration.TotalSeconds;
+        using var importer = new Assimp.AssimpContext();
+        // No mesh post-process needed for animation; keep import minimal and
+        // deterministic. Animation keys are unaffected by mesh flags.
+        var scene = importer.ImportFile(
+            sourcePath,
+            Assimp.PostProcessSteps.Triangulate | Assimp.PostProcessSteps.FlipUVs);
+
+        if (scene.AnimationCount == 0)
+        {
+            throw new InvalidContentException($"No animations in '{sourcePath}'.", input.Identity);
+        }
+
+        // Mixamo files carry takes 'Take 001' + 'mixamo.com' as animation
+        // stacks; Assimp exposes the single stack (here 'mixamo.com').
+        // There is exactly one animation; name the clip canonically.
+        var aiAnimation = scene.Animations[0];
+        if (scene.AnimationCount != 1)
+        {
+            context.Logger.LogImportantMessage(
+                "Erika animation: {0} stacks, using '{1}' as '{2}'.",
+                scene.AnimationCount, aiAnimation.Name, ClipName);
+        }
+
+        var durationSeconds = (float)(aiAnimation.DurationInTicks / aiAnimation.TicksPerSecond);
         if (durationSeconds <= 0)
         {
             throw new InvalidContentException($"Clip '{ClipName}' has non-positive duration.", input.Identity);
         }
 
-        var tracks = new Dictionary<(int Bone, bool Rotation), ChannelBuilder>();
-        foreach (var pair in animation.Channels)
+        // One merged channel per bone (translation and/or rotation tracks share
+        // the same key times for this source). Static bones (single-key
+        // fingertip segments, unanimated joints) are dropped; runtime falls
+        // back to bind.
+        var merged = new Dictionary<int, RawChannel>(skeleton.BoneCount);
+        foreach (var aiChannel in aiAnimation.NodeAnimationChannels)
         {
-            var boneIndex = MapBone(skeleton, pair.Key, input);
-            Accumulate(pair.Key, pair.Value, boneIndex, tracks, input);
+            if (!skeleton.TryGetBoneIndex(aiChannel.NodeName, out var boneIndex))
+            {
+                // Raw animation also animates no skeleton-external nodes for
+                // this source (51 channels, all bone-level); fail loudly if
+                // that ever changes instead of silently dropping motion.
+                throw new InvalidContentException(
+                    $"Animation channel '{aiChannel.NodeName}' matches no skeleton bone " +
+                    $"({skeleton.BoneCount} joints).",
+                    input.Identity);
+            }
+
+            if (merged.ContainsKey(boneIndex))
+            {
+                throw new InvalidContentException(
+                    $"Duplicate animation channel for bone '{aiChannel.NodeName}'.",
+                    input.Identity);
+            }
+
+            var channel = ConvertChannel(aiChannel, boneIndex, (float)aiAnimation.TicksPerSecond, input);
+            if (channel is not null)
+            {
+                merged.Add(boneIndex, channel);
+            }
         }
 
-        if (tracks.Count == 0)
+        if (merged.Count == 0)
         {
             throw new InvalidContentException($"Clip '{ClipName}' has no animated tracks.", input.Identity);
         }
 
-        var channels = tracks
-            .OrderBy(track => track.Key.Bone)
-            .ThenBy(track => track.Key.Rotation)
-            .Select(track => track.Value.Build(track.Key.Bone))
+        var channels = merged.Values
+            .OrderBy(channel => channel.BoneIndex)
+            .Select(channel => channel.Build())
             .ToList();
 
         var keyTotal = channels.Sum(channel => channel.KeyCount);
         var frames = durationSeconds * SourceFramesPerSecond;
         context.Logger.LogImportantMessage(
-            "Erika clip '{0}': {1:F3}s (~{2:F1} frames at {3} Hz), {4} channels, {5} keys.",
+            "Erika clip '{0}': {1:F3}s (~{2:F1} frames at {3} Hz), {4} channels, {5} keys (raw Assimp).",
             ClipName, durationSeconds, frames, SourceFramesPerSecond, channels.Count, keyTotal);
 
         VerifyFrameCadence(channels, context, input);
         LogHipsTranslation(skeleton, channels, context);
-        LogKeyVersusBind(skeleton, channels, context);
 
         return new AnimationClip(ClipName, durationSeconds, SourceFramesPerSecond, channels);
     }
 
-    // TEMPORARY Phase 2C importer comparison (revert before commit).
-    private static void LogKeyVersusBind(
-        Skeleton skeleton, List<ErikasLab.Engine.AnimationChannel> channels, ContentProcessorContext context)
+    private static RawChannel? ConvertChannel(
+        Assimp.NodeAnimationChannel aiChannel,
+        int boneIndex,
+        float ticksPerSecond,
+        NodeContent input)
     {
-        foreach (var want in new[] { "UpLeg", "Arm", "Shoulder", "Head", "Hips", "Foot" })
+        // Position/Rotation/Scaling keys share times for this source (121 keys
+        // for animated bones, 1 key for static fingertip segments). Scaling
+        // must stay unit; the source carries no scale animation (audit).
+        var posKeys = aiChannel.PositionKeys;
+        var rotKeys = aiChannel.RotationKeys;
+        var scaleKeys = aiChannel.ScalingKeys;
+
+        foreach (var skey in scaleKeys)
         {
-            var bone = skeleton.Bones
-                .Select((candidate, index) => (candidate, index))
-                .FirstOrDefault(entry => entry.candidate.Name.Contains(want, StringComparison.OrdinalIgnoreCase));
-            if (bone.candidate.Name is null)
+            if (Math.Abs(skey.Value.X - 1) > ScaleTolerance
+                || Math.Abs(skey.Value.Y - 1) > ScaleTolerance
+                || Math.Abs(skey.Value.Z - 1) > ScaleTolerance)
             {
-                continue;
+                throw new InvalidContentException(
+                    $"Unexpected scale in channel '{aiChannel.NodeName}': " +
+                    $"({skey.Value.X}, {skey.Value.Y}, {skey.Value.Z}). " +
+                    "The source must not animate scale.",
+                    input.Identity);
             }
-
-            var track = channels.FirstOrDefault(channel =>
-                channel.BoneIndex == bone.index && channel.HasRotation);
-            if (track is null || track.Rotations is null)
-            {
-                continue;
-            }
-
-            var mid = track.Rotations[track.Rotations.Length / 2];
-            var bind = bone.candidate.BindRotation;
-            var dot = Math.Abs(
-                mid.X * bind.X + mid.Y * bind.Y + mid.Z * bind.Z + mid.W * bind.W);
-            var angle = 2 * Math.Acos(Math.Min(1f, dot)) * 180 / Math.PI;
-            context.Logger.LogImportantMessage(
-                "Erika key-vs-bind: {0} mid-key {1:F1} deg from bind.",
-                bone.candidate.Name, angle);
         }
-    }
 
-    private static int MapBone(Skeleton skeleton, string channelName, NodeContent input)
-    {
-        if (!skeleton.TryGetBoneIndex(channelName, out var boneIndex))
+        // Use rotation keys as the master timebase (all animated bones have
+        // 121 rotation keys; static ones have 1). Position keys mirror the
+        // same times; look up by index (counts match for this source).
+        if (rotKeys.Count != posKeys.Count)
         {
             throw new InvalidContentException(
-                $"Animation channel '{channelName}' matches no skeleton bone " +
-                $"({skeleton.BoneCount} joints).",
+                $"Channel '{aiChannel.NodeName}' has mismatched key counts " +
+                $"(P={posKeys.Count}, R={rotKeys.Count}).",
                 input.Identity);
         }
 
-        return boneIndex;
-    }
-
-    private static void Accumulate(
-        string channelName,
-        PipelineAnimationChannel channel,
-        int boneIndex,
-        Dictionary<(int Bone, bool Rotation), ChannelBuilder> tracks,
-        NodeContent input)
-    {
-        if (channel.Count == 0)
+        if (rotKeys.Count == 0)
         {
-            return;
+            return null;
         }
 
-        var times = new float[channel.Count];
-        var translations = new System.Numerics.Vector3[channel.Count];
-        var rotations = new System.Numerics.Quaternion[channel.Count];
-        for (var i = 0; i < channel.Count; i++)
+        var times = new float[rotKeys.Count];
+        var translations = new System.Numerics.Vector3[rotKeys.Count];
+        var rotations = new System.Numerics.Quaternion[rotKeys.Count];
+        for (var i = 0; i < rotKeys.Count; i++)
         {
-            var key = channel[i];
-            if (i > 0 && (float)key.Time.TotalSeconds < times[i - 1])
+            var rkey = rotKeys[i];
+            var pkey = posKeys[i];
+            if (i > 0 && rkey.Time < rotKeys[i - 1].Time)
             {
                 throw new InvalidContentException(
-                    $"Channel '{channelName}' has unsorted keyframes.", input.Identity);
+                    $"Channel '{aiChannel.NodeName}' has unsorted keyframes.", input.Identity);
             }
 
-            if (!key.Transform.Decompose(out var scale, out var rotation, out var translation))
-            {
-                throw new InvalidContentException(
-                    $"Keyframe {i} of channel '{channelName}' does not decompose.", input.Identity);
-            }
-
-            AssertUnitScale(scale, $"keyframe {i} of channel '{channelName}'", input.Identity);
-            times[i] = (float)key.Time.TotalSeconds;
-            translations[i] = new System.Numerics.Vector3(translation.X, translation.Y, translation.Z);
-            rotations[i] = System.Numerics.Quaternion.Normalize(
-                new System.Numerics.Quaternion(rotation.X, rotation.Y, rotation.Z, rotation.W));
+            times[i] = (float)(rkey.Time / ticksPerSecond);
+            translations[i] = new System.Numerics.Vector3(pkey.Value.X, pkey.Value.Y, pkey.Value.Z);
+            var q = new System.Numerics.Quaternion(
+                rkey.Value.X, rkey.Value.Y, rkey.Value.Z, rkey.Value.W);
+            rotations[i] = System.Numerics.Quaternion.Normalize(q);
         }
 
         var variesTranslation = Varies(translations, static (a, b) =>
@@ -277,42 +294,16 @@ public sealed class ErikaModelProcessor : ModelProcessor
         var variesRotation = Varies(rotations, static (a, b) =>
             1 - Math.Abs(System.Numerics.Quaternion.Dot(a, b)) > VarianceEpsilon);
 
-        // Static channels (e.g. bind-pose layers) carry no motion; the runtime
-        // falls back to the bind transform, so they are dropped here.
-        if (variesTranslation)
+        // Static tracks (single-key fingertip segments, constant translations
+        // on non-root bones) carry no motion; runtime falls back to bind.
+        System.Numerics.Vector3[]? keptTrans = variesTranslation ? translations : null;
+        System.Numerics.Quaternion[]? keptRot = variesRotation ? rotations : null;
+        if (keptTrans is null && keptRot is null)
         {
-            AddTrack(tracks, boneIndex, rotation: false, channelName, times, translations, rotations, input);
+            return null;
         }
 
-        if (variesRotation)
-        {
-            AddTrack(tracks, boneIndex, rotation: true, channelName, times, translations, rotations, input);
-        }
-    }
-
-    private static void AddTrack(
-        Dictionary<(int Bone, bool Rotation), ChannelBuilder> tracks,
-        int boneIndex,
-        bool rotation,
-        string channelName,
-        float[] times,
-        System.Numerics.Vector3[] translations,
-        System.Numerics.Quaternion[] rotations,
-        NodeContent input)
-    {
-        var key = (boneIndex, rotation);
-        if (tracks.ContainsKey(key))
-        {
-            throw new InvalidContentException(
-                $"Duplicate {(rotation ? "rotation" : "translation")} track for bone index {boneIndex} " +
-                $"(channel '{channelName}').",
-                input.Identity);
-        }
-
-        tracks.Add(key, new ChannelBuilder(
-            (float[])times.Clone(),
-            rotation ? null : (System.Numerics.Vector3[])translations.Clone(),
-            rotation ? (System.Numerics.Quaternion[])rotations.Clone() : null));
+        return new RawChannel(boneIndex, times, keptTrans, keptRot);
     }
 
     private static bool Varies<T>(T[] values, Func<T, T, bool> differs)
@@ -397,12 +388,15 @@ public sealed class ErikaModelProcessor : ModelProcessor
             hips.bone.Name, min.X, max.X, min.Y, max.Y, min.Z, max.Z, track.KeyCount);
     }
 
-    private sealed class ChannelBuilder(
+    private sealed class RawChannel(
+        int boneIndex,
         float[] times,
         System.Numerics.Vector3[]? translations,
         System.Numerics.Quaternion[]? rotations)
     {
-        public ErikasLab.Engine.AnimationChannel Build(int boneIndex) =>
-            new(boneIndex, times, translations, rotations);
+        public int BoneIndex { get; } = boneIndex;
+
+        public ErikasLab.Engine.AnimationChannel Build() =>
+            new(BoneIndex, times, translations, rotations);
     }
 }

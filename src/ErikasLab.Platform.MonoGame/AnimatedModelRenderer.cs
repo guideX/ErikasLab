@@ -74,15 +74,6 @@ internal sealed class AnimatedModelRenderer
         foreach (var instance in scene.Models)
         {
             var prepared = GetOrPrepare(instance);
-            if (Environment.GetEnvironmentVariable("ERIKASLAB_BONEDUMP") == "1")
-            {
-                lines.Add("Erika runtime bones:");
-                foreach (var bone in prepared.Model.Bones)
-                {
-                    lines.Add($"  [{bone.Index}] '{bone.Name}' parent=" +
-                        (bone.Parent is null ? "(root)" : $"[{bone.Parent.Index}] '{bone.Parent.Name}'"));
-                }
-            }
             lines.Add($"Erika source: {ErikaFigure.SourceFile} -> asset '{instance.Asset}'");
             lines.Add($"Erika model: meshes={prepared.Model.Meshes.Count} " +
                 $"parts={prepared.Model.Meshes.Sum(m => m.MeshParts.Count)} " +
@@ -117,11 +108,6 @@ internal sealed class AnimatedModelRenderer
                     $"({TryArtifactSize(ErikaFigure.ClipAssetId, ".bin")?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} bytes)");
                 lines.Add($"Erika root motion: {prepared.RootMotionPolicy}; {prepared.HipsRange}");
                 lines.Add($"Erika bind check: max inverse-bind deviation {prepared.BindDeviation:F4} units");
-                var blendInfo = SummarizeBlendIndices(prepared.Model);
-                if (!string.IsNullOrEmpty(blendInfo))
-                {
-                    lines.Add($"Erika blend slots: {blendInfo}");
-                }
             }
         }
 
@@ -151,111 +137,17 @@ internal sealed class AnimatedModelRenderer
         var animation = prepared.Animation!;
         var time = animation.Clip.NormalizeTime(prepared.ElapsedSeconds);
 
-        // Keyframes from MonoGame's FbxImporter are already model-space bone
-        // transforms, so they skin directly (see README: no hierarchy pass).
-        // TEMPORARY Phase 2C experiments (revert before commit).
-        var direct = Environment.GetEnvironmentVariable("ERIKASLAB_DIRECT") == "1";
-        var modelBind = Environment.GetEnvironmentVariable("ERIKASLAB_MODELBIND") == "1";
-        var skelBind = Environment.GetEnvironmentVariable("ERIKASLAB_SKELBIND") == "1";
-        var probe = Environment.GetEnvironmentVariable("ERIKASLAB_PROBE");
-        var branch = "animated-direct-path";
-        if (probe is not null && int.TryParse(probe, out var probeSlot))
+        // Raw Assimp keys are full parent-relative locals (FBX pivots baked),
+        // matching BoneContent bind space. Standard hierarchical path: sample
+        // locals, resolve absolute via parents, skin with inverseBind * absolute.
+        AnimationEvaluator.EvaluateLocal(
+            animation.Skeleton, animation.Clip, time, prepared.Local);
+        AnimationEvaluator.EvaluateAbsolute(
+            animation.Skeleton, prepared.Local, prepared.Absolute);
+        AnimationEvaluator.ComputeSkinningMatrices(prepared.InverseBind, prepared.Absolute, prepared.Skin);
+        for (var i = 0; i < prepared.Skin.Length; i++)
         {
-            branch = $"probe-{probeSlot}";
-            if (probeSlot == 999)
-            {
-                // Nuclear probe: rotate EVERY slot 45 degrees about X.
-                for (var i = 0; i < prepared.Palette.Length; i++)
-                {
-                    prepared.Palette[i] = Matrix.CreateRotationX(MathF.PI / 4);
-                }
-            }
-            else
-            {
-                // Single-slot isolation: identity everywhere except one slot
-                // rotated 45 degrees about X. Shows which verts that slot drives.
-                for (var i = 0; i < prepared.Palette.Length; i++)
-                {
-                    prepared.Palette[i] = Matrix.Identity;
-                }
-
-                if (probeSlot >= 0 && probeSlot < prepared.Palette.Length)
-                {
-                    prepared.Palette[probeSlot] = Matrix.CreateRotationX(MathF.PI / 4);
-                }
-            }
-        }
-        else if (Environment.GetEnvironmentVariable("ERIKASLAB_SMEAR") == "1")
-        {
-            branch = "smear";
-            // Slot map: every slot translated +X proportionally to its index.
-            // A part's displacement reveals its slot assignment.
-            for (var i = 0; i < prepared.Palette.Length; i++)
-            {
-                prepared.Palette[i] = Matrix.CreateTranslation(i * 0.08f, 0, 0);
-            }
-        }
-        else if (modelBind)
-        {
-            branch = "modelbind";
-            // Hypothesis: stock indices already match Model.Bones order, so
-            // the model's own bind-absolute palette must render statically.
-            for (var i = 0; i < prepared.Palette.Length; i++)
-            {
-                prepared.Palette[i] = prepared.BoneTransforms[i];
-            }
-        }
-        else if (skelBind)
-        {
-            branch = "skelbind";
-            // Hypothesis: indices match skeleton discovery order (67).
-            for (var i = 0; i < prepared.BindAbsolute.Length; i++)
-            {
-                prepared.Palette[i] = ToMonoGameMatrix(prepared.BindAbsolute[i]);
-            }
-
-            for (var i = prepared.BindAbsolute.Length; i < prepared.Palette.Length; i++)
-            {
-                prepared.Palette[i] = Matrix.Identity;
-            }
-        }
-        else if (direct)
-        {
-            branch = "direct-t2";
-            // Hypothesis T2: keyframes already are final skinning matrices.
-            // Uses Absolute as scratch (hierarchy intentionally skipped).
-            AnimationEvaluator.EvaluateLocal(
-                animation.Skeleton, animation.Clip, time, prepared.Absolute);
-            var animated = new bool[animation.Skeleton.BoneCount];
-            foreach (var channel in animation.Clip.Channels)
-            {
-                animated[channel.BoneIndex] = true;
-            }
-
-            for (var i = 0; i < animated.Length; i++)
-            {
-                if (!animated[i])
-                {
-                    prepared.Absolute[i] = Numerics.Matrix4x4.Identity;
-                }
-            }
-
-            for (var i = 0; i < prepared.Map.Length; i++)
-            {
-                prepared.Palette[prepared.Map[i]] = ToMonoGameMatrix(prepared.Absolute[i]);
-            }
-        }
-        else
-        {
-            branch = "animated-direct-path";
-            AnimationEvaluator.EvaluateAbsoluteDirect(
-                animation.Skeleton, animation.Clip, time, prepared.BindAbsolute, prepared.Absolute);
-            AnimationEvaluator.ComputeSkinningMatrices(prepared.InverseBind, prepared.Absolute, prepared.Skin);
-
-            for (var i = 0; i < prepared.Map.Length; i++)
-            {
-                prepared.Palette[prepared.Map[i]] = ToMonoGameMatrix(prepared.Skin[i]);
-            }
+            prepared.Palette[i] = ToMonoGameMatrix(prepared.Skin[i]);
         }
 
         foreach (var (_, effect) in prepared.PartEffects)
@@ -266,27 +158,11 @@ internal sealed class AnimatedModelRenderer
             effect.Projection = projection;
         }
 
-        // TEMPORARY Phase 2C experiment trace (revert before commit).
-        if (!_branchTraced)
-        {
-            _branchTraced = true;
-            var checksum = 0f;
-            foreach (var matrix in prepared.Palette)
-            {
-                checksum += matrix.M11 + matrix.M22 + matrix.M33 + matrix.M41 + matrix.M42 + matrix.M43;
-            }
-
-            Console.WriteLine($"Erika anim branch: {branch}; palette checksum {checksum:F1}; " +
-                $"slot62=({prepared.Palette[62].M41:F2},{prepared.Palette[62].M42:F2},{prepared.Palette[62].M43:F2})");
-        }
-
         foreach (var mesh in prepared.Model.Meshes)
         {
             mesh.Draw();
         }
     }
-
-    private static bool _branchTraced;
 
     private PreparedCharacter GetOrPrepare(ModelInstance instance)
     {
@@ -413,28 +289,20 @@ internal sealed class AnimatedModelRenderer
                 new InvalidOperationException());
         }
 
-        var palette = new Matrix[model.Bones.Count];
+        // BlendIndices in the imported vertex buffers are mesh-relative
+        // (0..66 into the 67 deformation bones, skeleton order), NOT
+        // Model-relative (verified: Eyes weighted to slots 7/8 = LeftEye/
+        // RightEye in skeleton order, Body torso to slot 0 = Hips, Eyelashes
+        // to slot 5 = Head; Model order would map those to Spine/mesh nodes).
+        // Stock ModelProcessor does not remap them for this pivot-rich Mixamo
+        // source, so the GPU palette must be skeleton-ordered (67) to match.
+        // Model-space extras (RootNode + 4 mesh nodes) are never indexed.
+        var palette = new Matrix[skeleton.BoneCount];
         var inverseBind = new Numerics.Matrix4x4[skeleton.BoneCount];
         for (var i = 0; i < skeleton.BoneCount; i++)
         {
             inverseBind[i] = engineInverse[i];
-            palette[map[i]] = ToMonoGameMatrix(engineInverse[i]);
-        }
-
-        // Palette slots no bone references (processor root, mesh bones) are
-        // never indexed by BlendIndices; identity keeps them harmless.
-        for (var b = 0; b < palette.Length; b++)
-        {
-            var used = false;
-            for (var i = 0; i < map.Length && !used; i++)
-            {
-                used = map[i] == b;
-            }
-
-            if (!used)
-            {
-                palette[b] = Matrix.Identity;
-            }
+            palette[i] = ToMonoGameMatrix(engineInverse[i]);
         }
 
         var partEffects = ReplaceWithSkinnedEffects(model);
@@ -454,6 +322,7 @@ internal sealed class AnimatedModelRenderer
             Palette = palette,
             InverseBind = inverseBind,
             BindAbsolute = bindAbsolute,
+            Local = new Numerics.Matrix4x4[skeleton.BoneCount],
             Absolute = new Numerics.Matrix4x4[skeleton.BoneCount],
             Skin = new Numerics.Matrix4x4[skeleton.BoneCount],
             PartEffects = partEffects,
@@ -658,30 +527,6 @@ internal sealed class AnimatedModelRenderer
             : $"textured SkinnedEffect parts {withTexture}/{total}";
     }
 
-    // TEMPORARY Phase 2C index-order experiment (revert before commit).
-    private static string SummarizeBlendIndices(Model model)
-    {
-        if (Environment.GetEnvironmentVariable("ERIKASLAB_BLENDINFO") != "1")
-        {
-            return string.Empty;
-        }
-
-        var lines = new List<string>();
-        foreach (var mesh in model.Meshes)
-        {
-            foreach (var part in mesh.MeshParts)
-            {
-                var declaration = part.VertexBuffer.VertexDeclaration;
-                var elements = declaration.GetVertexElements();
-                lines.Add($"{mesh.Name}: stride={declaration.VertexStride} elements=" +
-                    string.Join(";", elements.Select(e =>
-                        $"{e.VertexElementUsage}[{e.UsageIndex}]:{e.VertexElementFormat}@{e.Offset}")));
-            }
-        }
-
-        return string.Join(" | ", lines);
-    }
-
     private static float MaxAbsDiff(Matrix a, Matrix b)
     {
         var row1 = Math.Abs(a.M11 - b.M11) + Math.Abs(a.M12 - b.M12) + Math.Abs(a.M13 - b.M13) + Math.Abs(a.M14 - b.M14);
@@ -727,6 +572,8 @@ internal sealed class AnimatedModelRenderer
         public Numerics.Matrix4x4[] InverseBind { get; init; } = [];
 
         public Numerics.Matrix4x4[] BindAbsolute { get; init; } = [];
+
+        public Numerics.Matrix4x4[] Local { get; init; } = [];
 
         public Numerics.Matrix4x4[] Absolute { get; init; } = [];
 

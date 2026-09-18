@@ -11,7 +11,9 @@ public static class AnimationEvaluator
 {
     /// <summary>
     /// Local (parent-space) matrices for every bone at <paramref name="timeSeconds"/>.
-    /// Animated bones sample their channel; all others use the bind transform.
+    /// Each bone has at most one channel (translation and/or rotation tracks
+    /// merged); unanimated bones use bind. Duplicate bone indices are rejected
+    /// at clip construction time.
     /// </summary>
     public static void EvaluateLocal(
         Skeleton skeleton,
@@ -63,50 +65,6 @@ public static class AnimationEvaluator
     {
         ArgumentNullException.ThrowIfNull(skeleton);
         skeleton.ResolveAbsolute(local, absolute);
-    }
-
-    /// <summary>
-    /// Absolute matrices for importers (like MonoGame's FbxImporter) whose
-    /// keyframes already are model-space bone transforms: animated bones use
-    /// their sampled keys directly, all others use the bind-pose absolute.
-    /// No hierarchy resolution is applied (applying it again would
-    /// double-transform every joint).
-    /// </summary>
-    public static void EvaluateAbsoluteDirect(
-        Skeleton skeleton,
-        AnimationClip clip,
-        float timeSeconds,
-        Matrix4x4[] bindAbsolute,
-        Matrix4x4[] absolute)
-    {
-        ArgumentNullException.ThrowIfNull(skeleton);
-        ArgumentNullException.ThrowIfNull(clip);
-        ArgumentNullException.ThrowIfNull(bindAbsolute);
-        ArgumentNullException.ThrowIfNull(absolute);
-        if (bindAbsolute.Length != skeleton.BoneCount || absolute.Length != skeleton.BoneCount)
-        {
-            throw new ArgumentException("Arrays must match the bone count.");
-        }
-
-        Array.Copy(bindAbsolute, absolute, skeleton.BoneCount);
-
-        foreach (var channel in clip.Channels)
-        {
-            if (channel.BoneIndex < 0 || channel.BoneIndex >= skeleton.BoneCount)
-            {
-                throw new InvalidOperationException(
-                    $"Channel targets bone index {channel.BoneIndex} outside the skeleton.");
-            }
-
-            var bone = skeleton.Bones[channel.BoneIndex];
-            var translation = channel.HasTranslation
-                ? channel.SampleTranslation(timeSeconds)
-                : bindAbsolute[channel.BoneIndex].Translation;
-            var rotation = channel.HasRotation
-                ? channel.SampleRotation(timeSeconds)
-                : Quaternion.CreateFromRotationMatrix(bindAbsolute[channel.BoneIndex]);
-            absolute[channel.BoneIndex] = Skeleton.Compose(rotation, translation);
-        }
     }
 
     /// <summary>

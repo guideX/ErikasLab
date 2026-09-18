@@ -159,39 +159,12 @@ public sealed class SkeletonHierarchyTests
     }
 
     [Fact]
-    public void EvaluateAbsoluteDirectUsesKeysVerbatimAndBindForTheRest()
+    public void ClipRejectsDuplicateBoneIndex()
     {
-        var skeleton = Chain();
-        var bindLocal = skeleton.ComputeBindLocalMatrices();
-        var bindAbsolute = new Matrix4x4[3];
-        skeleton.ResolveAbsolute(bindLocal, bindAbsolute);
-
-        var clip = new AnimationClip("direct", 2f, 30f, [
-            new AnimationChannel(1, [0f, 2f], [new Vector3(0, 5, 0), new Vector3(0, 7, 0)], null),
-        ]);
-        var absolute = new Matrix4x4[3];
-        AnimationEvaluator.EvaluateAbsoluteDirect(skeleton, clip, 1f, bindAbsolute, absolute);
-
-        // Animated bone: sampled key used verbatim (no parent applied).
-        Assert.Equal(new Vector3(0, 6, 0), absolute[1].Translation);
-        // Unanimated bones: bind absolute untouched.
-        Assert.Equal(bindAbsolute[0], absolute[0]);
-        Assert.Equal(bindAbsolute[2], absolute[2]);
-    }
-
-    [Fact]
-    public void EvaluateAbsoluteDirectRejectsChannelOutsideSkeleton()
-    {
-        var skeleton = Chain();
-        var bindLocal = skeleton.ComputeBindLocalMatrices();
-        var bindAbsolute = new Matrix4x4[3];
-        skeleton.ResolveAbsolute(bindLocal, bindAbsolute);
-        var clip = new AnimationClip("bad", 1f, 30f, [
-            new AnimationChannel(9, [0f], [Vector3.Zero], null),
-        ]);
-        Assert.Throws<InvalidOperationException>(
-            () => AnimationEvaluator.EvaluateAbsoluteDirect(
-                skeleton, clip, 0f, bindAbsolute, new Matrix4x4[3]));
+        Assert.Throws<ArgumentException>(() => new AnimationClip("dup", 1f, 30f, [
+            new AnimationChannel(0, [0f], [Vector3.Zero], null),
+            new AnimationChannel(0, [0f], [Vector3.Zero], null),
+        ]));
     }
 
     [Fact]

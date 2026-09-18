@@ -157,6 +157,19 @@ public sealed class AnimationClip
             throw new ArgumentException("A clip needs at least one channel.", nameof(channels));
         }
 
+        var seen = new HashSet<int>();
+        foreach (var channel in channels)
+        {
+            ArgumentNullException.ThrowIfNull(channel);
+            if (!seen.Add(channel.BoneIndex))
+            {
+                throw new ArgumentException(
+                    $"Duplicate channel for bone index {channel.BoneIndex}. " +
+                    "Merge translation and rotation tracks into one channel per bone.",
+                    nameof(channels));
+            }
+        }
+
         Name = name;
         DurationSeconds = durationSeconds;
         FramesPerSecond = framesPerSecond;

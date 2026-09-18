@@ -61,6 +61,14 @@ measured scale/orientation/grounding, startup model diagnostics), plus portable
 engine tests. It also fixes the ground-plane triangle winding, which had the
 Phase 1 ground silently back-face-culled.
 
+Phase 2C adds: single-clip skeletal playback of `Take 001`
+(`idle_looking_around`, 4.0 s @ 30 Hz) on the canonical 67-bone skeleton via a
+small custom processor + compact `erika_idle.bin` sidecar, portable Engine
+evaluator (`Skeleton`/`AnimationClip`/`AnimationEvaluator`, Slerp + linear
+interp, hierarchical resolve, `inverseBind * absolute` skinning), and
+`SkinnedEffect` rendering. Only single-clip playback exists (no
+blending/state machines/root-motion systems).
+
 Meshes are generated in code for the proof scene, and canonical Erika arrives through the content pipeline described below, so no manual asset authoring is required yet.
 
 ## Erika content (Phase 2B)
@@ -90,24 +98,72 @@ pipeline-only material types the runtime cannot deserialize.)
 
 Conventions (single explicit conversion, centralized in `ErikaFigure` /
 `ModelPlacement`; the FBX-to-world correction lives only in the platform
-`StaticModelRenderer`):
+model renderer):
 
 - 1 game world unit = 1 meter. True bind-pose height 180.1 FBX units maps to
   1.70 m (x0.00944); runtime mesh bounding spheres inflate the height (~238
   units), so they are diagnostics-only.
 - Import faces +Z (verified from bind-pose eyes-vs-head); yaw correction is 0.
 - Feet rest on the ground plane via the measured lower bound (-0.6 units).
-- Rendered pose is the imported default (bind-ish arms-out) pose. Animation
-  time is never advanced: there is no clip playback, no state machine, and no
-  custom animation processor yet — that is the explicit next phase (2C).
 
 If content is missing at startup, the app fails fast naming the expected asset
 and the restore steps above instead of surfacing a bare `ContentLoadException`.
 
+## Erika animation (Phase 2C)
+
+Single supported clip: `Take 001` from `erika/idle_looking_around.fbx`
+(4.000 s, 120 frames @ 30 Hz, 42 merged channels over 42 joints, 5082 keys;
+Hips translation + rotation, all other channels rotation-only, no scale).
+
+- Build: `ErikaModelProcessor` (in `src/ErikasLab.Content.Pipeline`, referencing
+  `AssimpNetter` from the MGCB distribution) emits the stock `Model` plus a
+  deterministic `erika_idle.bin` sidecar (`ErikaClipCodec` v1: magic
+  `ERIKACLIP1`, skeleton + clip, little-endian; ~107 kB) staged to
+  `Content/erika/`. Runtime never opens the FBX.
+- Why Assimp-direct: stock MonoGame `AnimationContent` strips FBX joint
+  orientation (pre-rotation pivots) from keys (UpLeg bind 180 deg becomes a
+  25 deg key), producing exploded/collapsed poses; raw Assimp
+  `NodeAnimationChannel` keys preserve correct full parent-relative locals
+  (UpLeg ~168 deg ~= bind 180 deg) and are used instead. Skeleton still comes
+  from the import DOM (`BoneContent`, OffsetMatrix-derived).
+- Canonical skeleton: 67 joints (`mixamorig:Hips` root; raw FBX `LimbNode`
+  names carry a `Model` suffix stripped by the importer), parent indices,
+  bind T/Q. Runtime `Model` has 72 bones (67 + RootNode + 4 mesh nodes);
+  all 67 map by name (fail loudly otherwise).
+- Bind/inverse-bind: local `R*T` (no scale), absolute via parents
+  (order-independent resolve, cycle-checked), inverse via `Matrix4x4.Invert`.
+  Cross-validated against the runtime `Model` (max inverse-bind deviation
+  0.0002 units).
+- Interpolation: translation linear (`Vector3.Lerp`), rotation
+  `Quaternion.Slerp` + normalize; exact `t=0`, exact-duration loops to 0,
+  negatives wrap; 30 Hz cadence verified.
+- Skinning: `skin = inverseBind * absolute` (System.Numerics, row-major;
+  direct element copy to MonoGame matrices, no transpose). At bind this is
+  identity (mesh untouched; verified by the identity-palette bind screenshot).
+  **Palette is skeleton-ordered (67)**: imported `BlendIndices` are
+  mesh-relative (0..66, e.g. Eyes to slots 7/8 = eyes, Body torso to slot 0 =
+  Hips), which stock `ModelProcessor` does not remap to `Model` order for
+  this pivot-rich source — a `Model`-ordered palette (72) stretches limbs.
+  The 5 `Model` extras are never indexed.
+- Root policy: Hips translation played verbatim (range X [-3.67,-0.29]
+  Y [94.50,97.70] Z [0.66,2.95], drift < 4 cm per axis, Y bob preserved);
+  Erika stays at her world spot, no generalized root-motion system.
+- Playback: auto-starts, advances on absolute game clock (no drift),
+  loops exactly, frame-rate independent; no per-frame FBX parsing/loading,
+  no GPU recreation, caller-provided arrays only (no per-frame allocations),
+  no per-frame console output.
+- Renderer: `AnimatedModelRenderer` replaces `SkinnedEffect` onto the 4
+  imported parts (weights per vertex from the declaration), preserving all 4
+  diffuse textures, depth, lighting, and world rendering; static path retained
+  for non-Erika models. Engine/Game stay free of MonoGame/Windows types.
+- Limitations: only this one clip plays; no blending, locomotion,
+  root-motion gameplay, bow/weapons/combat, IK, layers, retargeting, physics,
+  or movement.
+
 
 ## Deferred work
 
-Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, character animation playback, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now renders statically via the ignored local `erika/` source directory (see "Erika content" above); the remaining 36 FBX files await the animation phase.
+Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation blending/state machines/locomotion, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now plays a single idle clip via the ignored local `erika/` source directory (see above); the remaining 36 FBX files await future phases.
 
 ## Repository hygiene
 

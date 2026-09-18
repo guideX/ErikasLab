@@ -100,48 +100,6 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
         }
 
         base.Draw(gameTime);
-
-        // TEMPORARY Phase 2C verification hook (revert before commit):
-        // ERIKASLAB_SHOTS="<path>:<frames>,..." saves screenshots after the
-        // given rendered-frame counts and exits after the last one. Split on
-        // the last colon of each entry so Windows drive letters survive.
-        var shots = Environment.GetEnvironmentVariable("ERIKASLAB_SHOTS");
-        if (shots is not null)
-        {
-            _shotFrames++;
-            foreach (var entry in shots.Split(','))
-            {
-                var separator = entry.LastIndexOf(':');
-                if (separator > 0
-                    && int.TryParse(entry[(separator + 1)..], out var frames)
-                    && _shotFrames == frames)
-                {
-                    SaveShot(entry[..separator]);
-                }
-            }
-
-            if (_shotFrames >= shots.Split(',').Select(entry =>
-                int.TryParse(entry[(entry.LastIndexOf(':') + 1)..], out var frames) ? frames : 0).Max())
-            {
-                Exit();
-            }
-        }
-    }
-
-    // TEMPORARY Phase 2C verification hook (revert before commit).
-    private int _shotFrames;
-
-    private void SaveShot(string path)
-    {
-        var width = GraphicsDevice.Viewport.Width;
-        var height = GraphicsDevice.Viewport.Height;
-        var pixels = new int[width * height];
-        GraphicsDevice.GetBackBufferData(pixels);
-        using var texture = new Texture2D(GraphicsDevice, width, height);
-        texture.SetData(pixels);
-        using var stream = File.OpenWrite(path);
-        texture.SaveAsPng(stream, width, height);
-        Console.WriteLine($"Screenshot saved: {path}");
     }
 
     protected override void Dispose(bool disposing)
