@@ -15,7 +15,8 @@ public readonly record struct InputState(
     Vector2 MouseDelta,
     bool SelectIdle = false,
     bool SelectWalk = false,
-    bool SelectRun = false);
+    bool SelectRun = false,
+    bool Sprint = false);
 
 public interface IInputSource
 {

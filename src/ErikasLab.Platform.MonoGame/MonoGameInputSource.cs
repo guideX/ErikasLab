@@ -36,7 +36,8 @@ internal sealed class MonoGameInputSource : IInputSource
                 MouseDelta: Numerics.Vector2.Zero,
                 SelectIdle: keyboard.IsKeyDown(Keys.D1),
                 SelectWalk: keyboard.IsKeyDown(Keys.D2),
-                SelectRun: keyboard.IsKeyDown(Keys.D3));
+                SelectRun: keyboard.IsKeyDown(Keys.D3),
+                Sprint: keyboard.IsKeyDown(Keys.LeftShift) || keyboard.IsKeyDown(Keys.RightShift));
         }
 
         var bounds = _window.ClientBounds;
@@ -63,6 +64,7 @@ internal sealed class MonoGameInputSource : IInputSource
             MouseDelta: mouseDelta,
             SelectIdle: keyboard.IsKeyDown(Keys.D1) || keyboard.IsKeyDown(Keys.NumPad1),
             SelectWalk: keyboard.IsKeyDown(Keys.D2) || keyboard.IsKeyDown(Keys.NumPad2),
-            SelectRun: keyboard.IsKeyDown(Keys.D3) || keyboard.IsKeyDown(Keys.NumPad3));
+            SelectRun: keyboard.IsKeyDown(Keys.D3) || keyboard.IsKeyDown(Keys.NumPad3),
+            Sprint: keyboard.IsKeyDown(Keys.LeftShift) || keyboard.IsKeyDown(Keys.RightShift));
     }
 }

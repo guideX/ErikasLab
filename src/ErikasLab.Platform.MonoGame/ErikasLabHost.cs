@@ -28,14 +28,14 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
 
         Content.RootDirectory = "Content";
         IsMouseVisible = false;
-        Window.Title = "Erika's Lab - Phase 1";
+        Window.Title = "Erika's Lab - Phase 2E";
         Window.AllowUserResizing = true;
         Window.ClientSizeChanged += OnClientSizeChanged;
     }
 
     protected override void Initialize()
     {
-        Console.WriteLine("Erika's Lab | Phase 1 | initializing");
+        Console.WriteLine("Erika's Lab | Phase 2E | initializing");
         Console.WriteLine($"Runtime: {RuntimeInformation.FrameworkDescription} ({RuntimeInformation.ProcessArchitecture})");
         base.Initialize();
     }
@@ -48,6 +48,19 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
         _inputSource = new MonoGameInputSource(Window);
         _gameSession = new GameSession();
         _gameSession.Resize(GraphicsDevice.Viewport.Width, GraphicsDevice.Viewport.Height);
+
+        try
+        {
+            var idle = _modelLibrary.GetClip(ErikaFigure.IdleClipAssetId);
+            var walk = _modelLibrary.GetClip(ErikaFigure.WalkClipAssetId);
+            var run = _modelLibrary.GetClip(ErikaFigure.RunClipAssetId);
+            _gameSession.SetAnimationData(idle.Skeleton, idle.Clip, walk.Clip, run.Clip);
+        }
+        catch (ErikaContentException ex)
+        {
+            Console.WriteLine($"Erika animation failed: {ex.Message}");
+            throw;
+        }
 
         var rendererInfo = _renderer.Info;
         Console.WriteLine($"Graphics adapter: {rendererInfo.DeviceName}");
@@ -69,7 +82,7 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
             throw;
         }
 
-        Console.WriteLine("Controls: W/A/S/D move, mouse or arrow keys look, 1/2/3 idle/walk/run, Escape exits");
+        Console.WriteLine("Controls: W/A/S/D move (Shift sprint), mouse or arrow keys look, 1/2/3 diagnostic idle/walk/run, Escape exits");
     }
 
     protected override void Update(GameTime gameTime)

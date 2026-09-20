@@ -38,14 +38,18 @@ The host is framework-dependent and uses the installed .NET 8 runtime. The proje
 
 ## Controls
 
-- `W` / `S`: move forward / backward
-- `A` / `D`: strafe left / right
+- `W` / `S`: move forward / backward (camera-relative; Erika faces the heading and walks forward)
+- `A` / `D`: move left / right (camera-relative, normalized diagonals)
+- `Shift`: sprint modifier (movement + Shift plays run, movement alone plays walk)
 - Mouse: look around; the pointer is recentered while the game is focused
 - Arrow keys: keyboard look fallback
-- `1` / `2` / `3`: play idle / walk / run (Phase 2D validation selector, hard switch)
+- `1` / `2` / `3`: diagnostic idle / walk / run selector (hard switch, latches; movement takes precedence)
 - `Escape`: exit
 
-Movement is driven by portable `FrameTime.DeltaSeconds`, so it is not frame-rate dependent.
+No movement input plays idle (stationary). `Shift` alone stays idle. WASD now drives
+Erika; the camera keeps look only and no longer translates with WASD.
+Movement is driven by portable `FrameTime.DeltaSeconds` plus authored root-motion
+displacement, so it is not frame-rate dependent.
 
 ## Phase 1 capabilities
 
@@ -53,7 +57,7 @@ Movement is driven by portable `FrameTime.DeltaSeconds`, so it is not frame-rate
 - Perspective camera with position, yaw, pitch, field of view, aspect ratio, and near/far clip planes
 - Ground plane plus five colored boxes at varied positions, depths, sizes, and elevation
 - Depth buffering, back-face culling, basic directional lighting, and GPU vertex/index buffer caching
-- Delta-time camera movement, mouse/keyboard look, resizable backbuffer projection updates, and startup diagnostics
+- Delta-time animation/root-motion advancement, mouse/keyboard look, resizable backbuffer projection updates, and startup diagnostics
 - Clean restore/build with warnings treated as errors
 
 Phase 2B adds: stock-pipeline import of canonical Erika as a static textured
@@ -76,6 +80,15 @@ Phase 2D adds: multi-clip locomotion on the same pipeline — `walk`
 the canonical 67-bone skeleton, selectable with `1`/`2`/`3` (hard switch, loop
 reset, no blending). No gameplay movement, state machine, or root-motion
 system yet.
+
+Phase 2E adds: root-motion player locomotion on the Phase 2D clips — WASD
+movement intent (camera-relative, normalized diagonals) plus Shift sprint selects
+idle/walk/run, Erika faces the heading (snapped) and travels via the authored
+Hips displacement consumed into her world transform (`RootMotionEvaluator`,
+loop-wrap-aware, world-scaled by `ErikaFigure.Scale`), with rendered Hips X/Z
+pinned to clip start (Y/rotation/hierarchy preserved) and idle stationary.
+`1`/`2`/`3` remain as a non-interfering diagnostic latch. No blending, IK,
+physics, combat, jumping, or new assets.
 
 Meshes are generated in code for the proof scene, and canonical Erika arrives through the content pipeline described below, so no manual asset authoring is required yet.
 
@@ -166,35 +179,44 @@ no scale; Hips is the sole translation track):
   Hips), which stock `ModelProcessor` does not remap to `Model` order for
   this pivot-rich source — a `Model`-ordered palette (72) stretches limbs.
   The 5 `Model` extras are never indexed.
-- Root policy: Hips translation played verbatim for all clips; no generalized
-  root-motion system. Idle drift < 4 cm per axis
-  (X [-3.67,-0.29] Y [94.50,97.70] Z [0.66,2.95]); Erika stays at her world
-  spot. Walk/run are traveling clips, not in-place: walk Hips
-  X [-0.29,3.98] Y [94.68,102.65] Z [1.49,185.98] (184.5 units ≈ 1.74 m per
-  1.033 s loop); run Hips X [-0.68,1.33] Y [92.43,100.56] Z [1.70,376.49]
-  (374.8 units ≈ 3.54 m per 0.633 s loop). Looping snap-back keeps her near
-  the camera; the stored data is never zeroed.
-- Playback: idle auto-starts; `1`/`2`/`3` hard-switch idle/walk/run with a
-  deterministic loop reset (`GameSession.ActiveClipName`/`ClipStartSeconds`,
-  elapsed = absolute clock − start). Every clip loops exactly, advances on
-  the absolute game clock (no drift), is frame-rate independent; no per-frame
-  FBX parsing/loading, no GPU recreation, caller-provided arrays only
+- Root policy: consumed root motion (Phase 2E). Walk/run Hips horizontal (X/Z)
+  travel drives Erika's world transform via the portable `RootMotionEvaluator`:
+  absolute(t) = loops(t) * net + (sample(norm(t)) - start), delta = absolute(curr)
+  - absolute(prev), so N loops produce exactly N * net with no wrap discontinuity
+  (never naive currNorm - prevNorm). The delta (native FBX units) is scaled by
+  the centralized `ErikaFigure.Scale` (1 unit = 1 m via x0.00944) and rotated by
+  Erika's heading yaw, so displacement follows her facing. Rendered Hips X/Z is
+  pinned to the clip start reference (Y, rotation, and limb hierarchy preserved);
+  idle stays verbatim and stationary (its ~2 mm net drift never reaches the world).
+  Measured with the shipped sidecars: walk 184.50 units = 1.741 m per 1.0333 s
+  loop (~1.685 m/s); run 374.79 units = 3.538 m per 0.6333 s loop (~5.586 m/s).
+  Idle net is ~0. No loop snap-back; transitions (idle/walk/run, direction changes)
+  apply no stale delta and do not teleport.
+- Playback: idle auto-starts; movement selects walk/run (Shift sprints) and
+  `1`/`2`/`3` remain as a diagnostic latch (movement takes precedence), each
+  switch resetting deterministically to the loop start (`GameSession.ActiveClipName`/
+  `ClipStartSeconds`, elapsed = absolute clock − start, root bookkeeping reset so
+  no stale delta leaks). Holding a state never restarts the loop. Every clip loops
+  exactly, advances on the absolute game clock (no drift), is frame-rate independent;
+  no per-frame FBX parsing/loading, no GPU recreation, caller-provided arrays only
   (no per-frame allocations), no per-frame console output (one line per
   switch only).
 - Renderer: `AnimatedModelRenderer` replaces `SkinnedEffect` onto the 4
   imported parts (weights per vertex from the declaration), preserving all 4
   diffuse textures, depth, lighting, and world rendering; static path retained
   for non-Erika models. Engine/Game stay free of MonoGame/Windows types.
-- Limitations: three validation clips with hard switches only; no blending,
-  locomotion state machine, root-motion gameplay (walk/run visibly snap back
-  each loop), bow/weapons/combat, IK, layers, retargeting, physics, or
-  movement. Skeleton compatibility is strict: walk/run sidecar skeletons must
+- Limitations: three clips with hard switches only; no blending,
+  acceleration/deceleration, turn animations (headings snap), strafing/backwards
+  clips (Erika faces the heading and uses the forward clip), foot IK, layers,
+  retargeting, physics, collision/gravity/jumping, or movement. WASD drives Erika
+  camera-relatively (default camera: W=-Z, S=+Z, A=-X, D=+X); the camera itself
+  keeps look only. Skeleton compatibility is strict: walk/run sidecar skeletons must
   match the canonical 67 joints (names, parents, bind pose) or content load
   fails loudly.
 
 ## Deferred work
 
-Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation blending/state machines/locomotion, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now plays idle/walk/run via the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. The smallest logical next step is a deliberate locomotion policy: WASD-driven clip selection plus a root-motion decision (consume Hips travel into world motion vs. in-place masking) informed by the measured 1.74 m walk and 3.54 m run per-loop travel.
+Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation blending/state machines, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. The smallest logical next step is animation blending (short crossfades on locomotion switches plus turn-rate smoothing) without changing the root-motion authority established here.
 
 ## Repository hygiene
 

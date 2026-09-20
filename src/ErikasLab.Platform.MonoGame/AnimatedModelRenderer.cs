@@ -160,6 +160,26 @@ internal sealed class AnimatedModelRenderer
         // locals, resolve absolute via parents, skin with inverseBind * absolute.
         AnimationEvaluator.EvaluateLocal(
             prepared.Skeleton!, clip, time, prepared.Local);
+
+        // Phase 2E root-motion consumption: horizontal Hips travel already
+        // drives the character world transform in GameSession, so pin rendered
+        // Hips X/Z to the clip start reference (preserving Y, rotation, and
+        // the remaining hierarchy) to avoid double application. Idle stays
+        // verbatim (stationary, small drift only).
+        if (prepared.HipsBoneIndex >= 0)
+        {
+            if (string.Equals(ActiveClipName, ErikaFigure.WalkClipName, StringComparison.Ordinal))
+            {
+                prepared.Local[prepared.HipsBoneIndex].M41 = prepared.WalkStart.X;
+                prepared.Local[prepared.HipsBoneIndex].M43 = prepared.WalkStart.Z;
+            }
+            else if (string.Equals(ActiveClipName, ErikaFigure.RunClipName, StringComparison.Ordinal))
+            {
+                prepared.Local[prepared.HipsBoneIndex].M41 = prepared.RunStart.X;
+                prepared.Local[prepared.HipsBoneIndex].M43 = prepared.RunStart.Z;
+            }
+        }
+
         AnimationEvaluator.EvaluateAbsolute(
             prepared.Skeleton!, prepared.Local, prepared.Absolute);
         AnimationEvaluator.ComputeSkinningMatrices(prepared.InverseBind, prepared.Absolute, prepared.Skin);
@@ -378,6 +398,16 @@ internal sealed class AnimatedModelRenderer
 
         var partEffects = ReplaceWithSkinnedEffects(model);
 
+        var hipsBoneIndex = skeleton.TryGetBoneIndex(ErikaFigure.HipsBoneName, out var hips)
+            ? hips
+            : -1;
+        var walkStart = hipsBoneIndex >= 0
+            ? RootMotionEvaluator.GetStartTranslation(walkClip, hipsBoneIndex)
+            : new Numerics.Vector3();
+        var runStart = hipsBoneIndex >= 0
+            ? RootMotionEvaluator.GetStartTranslation(runClip, hipsBoneIndex)
+            : new Numerics.Vector3();
+
         return new PreparedCharacter
         {
             Model = model,
@@ -392,6 +422,9 @@ internal sealed class AnimatedModelRenderer
             IdleClip = idleClip,
             WalkClip = walkClip,
             RunClip = runClip,
+            HipsBoneIndex = hipsBoneIndex,
+            WalkStart = walkStart,
+            RunStart = runStart,
             Map = map,
             Palette = palette,
             InverseBind = inverseBind,
@@ -645,6 +678,15 @@ internal sealed class AnimatedModelRenderer
 
         public AnimationClip? RunClip { get; init; }
 
+        /// <summary>Canonical Hips bone index for root-motion consumption (-1 when absent).</summary>
+        public int HipsBoneIndex { get; init; } = -1;
+
+        /// <summary>Authored Hips translation at walk clip start (rendered XZ reference).</summary>
+        public Numerics.Vector3 WalkStart { get; init; }
+
+        /// <summary>Authored Hips translation at run clip start (rendered XZ reference).</summary>
+        public Numerics.Vector3 RunStart { get; init; }
+
         public int[] Map { get; init; } = [];
 
         public Matrix[] Palette { get; init; } = [];
@@ -664,13 +706,14 @@ internal sealed class AnimatedModelRenderer
         public float BindDeviation { get; init; }
 
         /// <summary>
-        /// Phase 2D plays Hips translation verbatim for all clips: idle drift
-        /// stays under 4 cm per axis; walk/run carry significant forward (+Z)
-        /// travel per loop (walk ~184 units, run ~375 units) with snap-back on
-        /// loop. No generalized root-motion system yet.
+        /// Phase 2E consumes Hips horizontal travel into the character world
+        /// transform (GameSession, authored displacement authority): walk/run
+        /// rendered Hips X/Z are pinned to the clip start reference (Y,
+        /// rotation, and limb hierarchy preserved), idle stays verbatim and
+        /// stationary. No loop snap-back; N loops produce N * net displacement.
         /// </summary>
         public string RootMotionPolicy { get; init; } =
-            "verbatim (idle drift < 4cm; walk/run forward travel per loop, snap-back on loop)";
+            "consumed (walk/run Hips XZ drives world transform, rendered XZ pinned to clip start; idle stationary)";
 
         public int MappedBones => Map.Length;
 
