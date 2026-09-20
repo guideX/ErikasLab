@@ -38,14 +38,24 @@ internal sealed class AnimatedModelRenderer
     /// <summary>
     /// Advances playback. Uses the absolute game clock (not accumulated
     /// deltas), so long runs cannot drift; looping is exact modulo math.
+    /// The host copies <see cref="GameSession.ActiveClipName"/> /
+    /// <see cref="GameSession.ClipStartSeconds"/> here each frame; switching
+    /// clips resets to the loop start deterministically (hard switch, no
+    /// blending). Elapsed for the active clip is Total - Start.
     /// </summary>
     public void Update(FrameTime frameTime)
     {
         foreach (var prepared in _prepared.Values)
         {
-            prepared.ElapsedSeconds = frameTime.TotalSeconds;
+            prepared.TotalSeconds = frameTime.TotalSeconds;
         }
     }
+
+    /// <summary>Active stable clip id (idle_looking_around/walk/run). Set by the host from the session.</summary>
+    public string ActiveClipName { get; set; } = ErikaFigure.IdleClipName;
+
+    /// <summary>Absolute game-clock origin of the active clip loop. Set by the host from the session.</summary>
+    public double ClipStartSeconds { get; set; }
 
     public void Draw(Scene scene, Matrix view, Matrix projection)
     {
@@ -56,7 +66,7 @@ internal sealed class AnimatedModelRenderer
             var prepared = GetOrPrepare(instance);
             var world = prepared.Correction * ToMonoGameMatrix(instance.Transform.WorldMatrix);
 
-            if (prepared.Animation is null)
+            if (prepared.Skeleton is null)
             {
                 DrawStatic(prepared, world, view, projection);
             }
@@ -90,23 +100,30 @@ internal sealed class AnimatedModelRenderer
                 $"lift {ErikaFigure.GroundLift:F3} m");
             lines.Add($"Erika effects: {prepared.EffectSummary}; {prepared.TextureSummary}");
 
-            if (prepared.Animation is null)
+            if (prepared.Skeleton is null)
             {
                 lines.Add("Erika animation: none (static default pose)");
             }
             else
             {
-                var clip = prepared.Animation.Clip;
-                var keyTotal = clip.Channels.Sum(channel => channel.KeyCount);
-                var frames = clip.DurationSeconds * clip.FramesPerSecond;
-                lines.Add($"Erika clip: '{clip.Name}' {clip.DurationSeconds:F3}s @ {clip.FramesPerSecond:F0}Hz " +
-                    $"({frames:F0} frames), {clip.Channels.Count} channels, {keyTotal} keys");
-                lines.Add($"Erika skeleton: {prepared.Animation.Skeleton.BoneCount} joints " +
-                    $"mapped {prepared.MappedBones}/{prepared.Animation.Skeleton.BoneCount} runtime bones, " +
+                foreach (var clip in new[] { prepared.IdleClip!, prepared.WalkClip!, prepared.RunClip! })
+                {
+                    var keyTotal = clip.Channels.Sum(channel => channel.KeyCount);
+                    var frames = clip.DurationSeconds * clip.FramesPerSecond;
+                    lines.Add($"Erika clip: '{clip.Name}' {clip.DurationSeconds:F3}s @ {clip.FramesPerSecond:F0}Hz " +
+                        $"({frames:F0} frames), {clip.Channels.Count} channels, {keyTotal} keys");
+                }
+
+                lines.Add($"Erika skeleton: {prepared.Skeleton!.BoneCount} joints " +
+                    $"mapped {prepared.MappedBones}/{prepared.Skeleton.BoneCount} runtime bones, " +
                     $"palette {prepared.PaletteSize}");
-                lines.Add($"Erika artifact: {ErikaFigure.ClipAssetId}.bin " +
-                    $"({TryArtifactSize(ErikaFigure.ClipAssetId, ".bin")?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} bytes)");
-                lines.Add($"Erika root motion: {prepared.RootMotionPolicy}; {prepared.HipsRange}");
+                foreach (var asset in new[] { ErikaFigure.IdleClipAssetId, ErikaFigure.WalkClipAssetId, ErikaFigure.RunClipAssetId })
+                {
+                    lines.Add($"Erika artifact: {asset}.bin " +
+                        $"({TryArtifactSize(asset, ".bin")?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} bytes)");
+                }
+
+                lines.Add($"Erika root motion: {prepared.RootMotionPolicy}; active '{ActiveClipName}' ({prepared.HipsRangeFor(ActiveClipName)})");
                 lines.Add($"Erika bind check: max inverse-bind deviation {prepared.BindDeviation:F4} units");
             }
         }
@@ -132,18 +149,19 @@ internal sealed class AnimatedModelRenderer
         }
     }
 
-    private static void DrawAnimated(PreparedCharacter prepared, Matrix world, Matrix view, Matrix projection)
+    private void DrawAnimated(PreparedCharacter prepared, Matrix world, Matrix view, Matrix projection)
     {
-        var animation = prepared.Animation!;
-        var time = animation.Clip.NormalizeTime(prepared.ElapsedSeconds);
+        var clip = prepared.ClipFor(ActiveClipName);
+        var elapsed = prepared.TotalSeconds - ClipStartSeconds;
+        var time = clip.NormalizeTime(elapsed);
 
         // Raw Assimp keys are full parent-relative locals (FBX pivots baked),
         // matching BoneContent bind space. Standard hierarchical path: sample
         // locals, resolve absolute via parents, skin with inverseBind * absolute.
         AnimationEvaluator.EvaluateLocal(
-            animation.Skeleton, animation.Clip, time, prepared.Local);
+            prepared.Skeleton!, clip, time, prepared.Local);
         AnimationEvaluator.EvaluateAbsolute(
-            animation.Skeleton, prepared.Local, prepared.Absolute);
+            prepared.Skeleton!, prepared.Local, prepared.Absolute);
         AnimationEvaluator.ComputeSkinningMatrices(prepared.InverseBind, prepared.Absolute, prepared.Skin);
         for (var i = 0; i < prepared.Skin.Length; i++)
         {
@@ -209,20 +227,70 @@ internal sealed class AnimatedModelRenderer
                 SummarizeEffects(model), SummarizeTextures(model));
         }
 
-        var animation = _library.GetClip(ErikaFigure.ClipAssetId);
-        return PrepareAnimated(model, animation, boneTransforms, bounds, bindFacing, yaw, correction);
+        var idle = _library.GetClip(ErikaFigure.IdleClipAssetId);
+        var walk = _library.GetClip(ErikaFigure.WalkClipAssetId);
+        var run = _library.GetClip(ErikaFigure.RunClipAssetId);
+        AssertCompatibleSkeleton(idle.Skeleton, walk.Skeleton, ErikaFigure.WalkClipAssetId.Name);
+        AssertCompatibleSkeleton(idle.Skeleton, run.Skeleton, ErikaFigure.RunClipAssetId.Name);
+        return PrepareAnimated(
+            model, idle.Skeleton, idle.Clip, walk.Clip, run.Clip,
+            boneTransforms, bounds, bindFacing, yaw, correction);
+    }
+
+    /// <summary>
+    /// Fail loudly if a locomotion sidecar skeleton diverges from the
+    /// canonical idle skeleton (names, parents, bind pose). Static bones may
+    /// ride bind at runtime, but a wrongly-bound channel would explode the
+    /// mesh, so compatibility is strict.
+    /// </summary>
+    private static void AssertCompatibleSkeleton(Skeleton canonical, Skeleton other, string assetName)
+    {
+        if (other.BoneCount != canonical.BoneCount)
+        {
+            throw new ErikaContentException(
+                $"Clip asset '{assetName}' skeleton has {other.BoneCount} joints, " +
+                $"expected canonical {canonical.BoneCount}. Rebuild from the base-variant source.",
+                new InvalidOperationException("Skeleton bone count mismatch."));
+        }
+
+        for (var i = 0; i < canonical.BoneCount; i++)
+        {
+            var expected = canonical.Bones[i];
+            var actual = other.Bones[i];
+            if (!string.Equals(actual.Name, expected.Name, StringComparison.Ordinal)
+                || actual.ParentIndex != expected.ParentIndex)
+            {
+                throw new ErikaContentException(
+                    $"Clip asset '{assetName}' bone {i} is '{actual.Name}' parent {actual.ParentIndex}, " +
+                    $"expected '{expected.Name}' parent {expected.ParentIndex}.",
+                    new InvalidOperationException("Skeleton hierarchy mismatch."));
+            }
+
+            var dt = Numerics.Vector3.Distance(actual.BindTranslation, expected.BindTranslation);
+            var dq = 1 - Math.Abs(Numerics.Quaternion.Dot(actual.BindRotation, expected.BindRotation));
+            const float BindTolerance = 1e-3f;
+            if (dt > BindTolerance || dq > 1e-6)
+            {
+                throw new ErikaContentException(
+                    $"Clip asset '{assetName}' bone '{actual.Name}' bind differs " +
+                    $"(dT={dt:F5}, dQ={dq:E2}). Sources must share the canonical bind pose.",
+                    new InvalidOperationException("Skeleton bind mismatch."));
+            }
+        }
     }
 
     private PreparedCharacter PrepareAnimated(
         Model model,
-        SkeletalAnimation animation,
+        Skeleton skeleton,
+        AnimationClip idleClip,
+        AnimationClip walkClip,
+        AnimationClip runClip,
         Matrix[] boneTransforms,
         NativeBounds bounds,
         Vector3 bindFacing,
         float yaw,
         Matrix correction)
     {
-        var skeleton = animation.Skeleton;
         var map = new int[skeleton.BoneCount];
         var missing = new List<string>();
         for (var i = 0; i < skeleton.BoneCount; i++)
@@ -254,14 +322,17 @@ internal sealed class AnimatedModelRenderer
                 new KeyNotFoundException(missing[0]));
         }
 
-        foreach (var channel in animation.Clip.Channels)
+        foreach (var clip in new[] { idleClip, walkClip, runClip })
         {
-            if (channel.BoneIndex < 0 || channel.BoneIndex >= skeleton.BoneCount)
+            foreach (var channel in clip.Channels)
             {
-                throw new ErikaContentException(
-                    $"Clip '{animation.Clip.Name}' targets bone index {channel.BoneIndex} " +
-                    $"outside the {skeleton.BoneCount}-joint skeleton.",
-                    new InvalidOperationException("Channel bone index out of range."));
+                if (channel.BoneIndex < 0 || channel.BoneIndex >= skeleton.BoneCount)
+                {
+                    throw new ErikaContentException(
+                        $"Clip '{clip.Name}' targets bone index {channel.BoneIndex} " +
+                        $"outside the {skeleton.BoneCount}-joint skeleton.",
+                        new InvalidOperationException("Channel bone index out of range."));
+                }
             }
         }
 
@@ -317,7 +388,10 @@ internal sealed class AnimatedModelRenderer
             Correction = correction,
             EffectSummary = SummarizeEffects(model),
             TextureSummary = SummarizeSkinnedTextures(model),
-            Animation = animation,
+            Skeleton = skeleton,
+            IdleClip = idleClip,
+            WalkClip = walkClip,
+            RunClip = runClip,
             Map = map,
             Palette = palette,
             InverseBind = inverseBind,
@@ -327,7 +401,6 @@ internal sealed class AnimatedModelRenderer
             Skin = new Numerics.Matrix4x4[skeleton.BoneCount],
             PartEffects = partEffects,
             BindDeviation = deviation,
-            HipsRange = DescribeHipsRange(animation),
         };
     }
 
@@ -387,12 +460,12 @@ internal sealed class AnimatedModelRenderer
             new InvalidOperationException());
     }
 
-    private static string DescribeHipsRange(SkeletalAnimation animation)
+    private static string DescribeHipsRange(Skeleton skeleton, AnimationClip clip)
     {
         var hips = -1;
-        for (var i = 0; i < animation.Skeleton.BoneCount; i++)
+        for (var i = 0; i < skeleton.BoneCount; i++)
         {
-            if (string.Equals(animation.Skeleton.Bones[i].Name, ErikaFigure.HipsBoneName, StringComparison.Ordinal))
+            if (string.Equals(skeleton.Bones[i].Name, ErikaFigure.HipsBoneName, StringComparison.Ordinal))
             {
                 hips = i;
                 break;
@@ -404,7 +477,7 @@ internal sealed class AnimatedModelRenderer
             return "Hips bone absent (unexpected)";
         }
 
-        foreach (var channel in animation.Clip.Channels)
+        foreach (var channel in clip.Channels)
         {
             if (channel.BoneIndex == hips && channel.HasTranslation && channel.Translations is not null)
             {
@@ -416,12 +489,12 @@ internal sealed class AnimatedModelRenderer
                     max = Numerics.Vector3.Max(max, value);
                 }
 
-                return $"Hips T range X [{min.X:F2}, {max.X:F2}] Y [{min.Y:F2}, {max.Y:F2}] " +
+                return $"'{clip.Name}' Hips T range X [{min.X:F2}, {max.X:F2}] Y [{min.Y:F2}, {max.Y:F2}] " +
                     $"Z [{min.Z:F2}, {max.Z:F2}] over {channel.KeyCount} keys (verbatim policy)";
             }
         }
 
-        return "Hips rotation-only (no translation keys)";
+        return $"'{clip.Name}' Hips rotation-only (no translation keys)";
     }
 
     private static long? TryArtifactSize(ModelAssetId asset, string extension)
@@ -563,7 +636,14 @@ internal sealed class AnimatedModelRenderer
 
         public required string TextureSummary { get; init; }
 
-        public SkeletalAnimation? Animation { get; init; }
+        /// <summary>Canonical shared skeleton (idle source). Null for static models.</summary>
+        public Skeleton? Skeleton { get; init; }
+
+        public AnimationClip? IdleClip { get; init; }
+
+        public AnimationClip? WalkClip { get; init; }
+
+        public AnimationClip? RunClip { get; init; }
 
         public int[] Map { get; init; } = [];
 
@@ -583,20 +663,39 @@ internal sealed class AnimatedModelRenderer
 
         public float BindDeviation { get; init; }
 
-        public string HipsRange { get; init; } = string.Empty;
-
         /// <summary>
-        /// Phase 2C plays Hips translation verbatim: measured drift stays
-        /// under 4 cm in every axis, so no root-motion system is needed yet.
+        /// Phase 2D plays Hips translation verbatim for all clips: idle drift
+        /// stays under 4 cm per axis; walk/run carry significant forward (+Z)
+        /// travel per loop (walk ~184 units, run ~375 units) with snap-back on
+        /// loop. No generalized root-motion system yet.
         /// </summary>
         public string RootMotionPolicy { get; init; } =
-            "verbatim (Hips drift < 4cm; Y bob preserved)";
+            "verbatim (idle drift < 4cm; walk/run forward travel per loop, snap-back on loop)";
 
         public int MappedBones => Map.Length;
 
         public int PaletteSize => Palette.Length;
 
-        public double ElapsedSeconds { get; set; }
+        public double TotalSeconds { get; set; }
+
+        /// <summary>Resolve the active stable id to its clip (unknown ids fall back to idle).</summary>
+        public AnimationClip ClipFor(string clipName)
+        {
+            if (string.Equals(clipName, ErikaFigure.WalkClipName, StringComparison.Ordinal))
+            {
+                return WalkClip!;
+            }
+
+            if (string.Equals(clipName, ErikaFigure.RunClipName, StringComparison.Ordinal))
+            {
+                return RunClip!;
+            }
+
+            return IdleClip!;
+        }
+
+        public string HipsRangeFor(string clipName) =>
+            Skeleton is null ? string.Empty : DescribeHipsRange(Skeleton, ClipFor(clipName));
 
         public static PreparedCharacter Static(
             Model model,

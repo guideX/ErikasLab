@@ -1,31 +1,38 @@
 """Restore the external texture files demanded by the MonoGame content import.
 
 Background (see docs/ERIKA_ASSET_AUDIT.md and README.md):
-  * `erika/idle_looking_around.fbx` (local, git-ignored) embeds its textures as
-    Video/Content blobs, but also records the original Mixamo workstation paths
-    (e.g. `/home/app/mixamo-mini/tmp/skins_<guid>.fbm/*.png`).
-  * Stock MonoGame importers (FbxImporter / OpenAssetImporter, 3.8.4.1) follow the
-    recorded paths instead of the embedded blobs, and MGCB fails the build when
-    those files do not exist. There is no bare-filename fallback (verified).
-  * MGCB roots the unix-absolute path onto the drive hosting this repository, so
-    on this machine it demands `D:\\home\\app\\...`.
+  * Erika FBXs (local, git-ignored) embed their textures as Video/Content
+    blobs, but also record the original Mixamo workstation paths (e.g.
+    `/home/app/mixamo-mini/tmp/skins_<guid>.fbm/*.png`).
+  * Stock MonoGame importers (FbxImporter / OpenAssetImporter, 3.8.4.1) follow
+    the recorded paths instead of the embedded blobs, and MGCB fails the build
+    when those files do not exist. There is no bare-filename fallback
+    (verified).
+  * MGCB roots the unix-absolute path onto the drive hosting this repository,
+    so on this machine it demands `D:\\home\\app\\...`.
+  * Each FBX records its own per-export GUID directory, so every built source
+    needs its own extraction (same PNG bytes, different target paths).
 
-This script extracts the embedded blobs (read-only on the FBX; the source file is
-never modified) and writes them exactly where the importer looks. It is
+This script extracts the embedded blobs (read-only on the FBX; source files
+are never modified) and writes them exactly where the importer looks. It is
 deterministic: same FBX bytes always produce the same PNG bytes (verified PNG
 magic + sizes). Run it once per machine before `dotnet build`:
 
     python tools/extract_erika_textures.py
 
-Only the canonical Phase 2B source (`erika/idle_looking_around.fbx`) is handled;
-nothing is extracted from the other 36 files.
+Phase 2D sources (`idle_looking_around`, `walking`, `running`) are handled;
+nothing is extracted from the other files.
 """
 
 import os
 import struct
 import sys
 
-CANONICAL_FBX = os.path.join("erika", "idle_looking_around.fbx")
+CANONICAL_FBXS = (
+    os.path.join("erika", "idle_looking_around.fbx"),
+    os.path.join("erika", "walking.fbx"),
+    os.path.join("erika", "running.fbx"),
+)
 
 
 def parse_props(data, pos, nprops):
@@ -112,16 +119,15 @@ def parse_node(data, pos, is64, stack, videos):
     return name, pos
 
 
-def main():
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    fbx_path = os.path.join(repo_root, CANONICAL_FBX)
+def extract_one(repo_root, rel_path):
+    fbx_path = os.path.join(repo_root, rel_path)
     if not os.path.isfile(fbx_path):
         print(
             "Missing required local asset: %s\n"
             "Restore the ignored local erika/ source directory, then re-run."
-            % CANONICAL_FBX
+            % rel_path
         )
-        return 1
+        return None
     with open(fbx_path, "rb") as handle:
         data = handle.read()
     version = struct.unpack_from("<I", data, 23)[0]
@@ -147,9 +153,20 @@ def main():
         os.makedirs(os.path.dirname(target), exist_ok=True)
         with open(target, "wb") as handle:
             handle.write(blob)
-        print("wrote %s (%d bytes)" % (target, len(blob)))
+        print("wrote %s (%d bytes) [%s]" % (target, len(blob), rel_path))
         written += 1
-    if written == 0:
+    return written
+
+
+def main():
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    total = 0
+    for rel in CANONICAL_FBXS:
+        written = extract_one(repo_root, rel)
+        if written is None:
+            return 1
+        total += written
+    if total == 0:
         print("No embedded textures found; nothing written.")
         return 1
     return 0

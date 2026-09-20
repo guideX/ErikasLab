@@ -57,6 +57,29 @@ public static class ErikaFigure
     /// <summary>Phase 2C animation artifact built from the same source.</summary>
     public static ModelAssetId ClipAssetId => new("erika/erika_idle");
 
+    /// <summary>Stable clip identifiers retrievable through one system (Phase 2D).</summary>
+    public const string IdleClipName = "idle_looking_around";
+
+    public const string WalkClipName = "walk";
+
+    public const string RunClipName = "run";
+
+    /// <summary>Phase 2D animation artifacts (one skeleton+clip sidecar each).</summary>
+    public static ModelAssetId IdleClipAssetId => new("erika/erika_idle");
+
+    public static ModelAssetId WalkClipAssetId => new("erika/erika_walk");
+
+    public static ModelAssetId RunClipAssetId => new("erika/erika_run");
+
+    /// <summary>Resolve a stable clip name to its sidecar asset.</summary>
+    public static ModelAssetId ClipAssetFor(string clipName) =>
+        clipName switch
+        {
+            WalkClipName => WalkClipAssetId,
+            RunClipName => RunClipAssetId,
+            _ => IdleClipAssetId,
+        };
+
     /// <summary>Bone carrying the clip's root translation (importer form).</summary>
     public const string HipsBoneName = "mixamorig:Hips";
 

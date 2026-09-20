@@ -14,6 +14,7 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
     private MonoGameRenderer? _renderer;
     private ModelLibrary? _modelLibrary;
     private AnimatedModelRenderer? _modelRenderer;
+    private string _loggedClip = ErikaFigure.IdleClipName;
 
     public ErikasLabHost()
     {
@@ -68,7 +69,7 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
             throw;
         }
 
-        Console.WriteLine("Controls: W/A/S/D move, mouse or arrow keys look, Escape exits");
+        Console.WriteLine("Controls: W/A/S/D move, mouse or arrow keys look, 1/2/3 idle/walk/run, Escape exits");
     }
 
     protected override void Update(GameTime gameTime)
@@ -82,7 +83,18 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
             gameTime.TotalGameTime.TotalSeconds,
             gameTime.ElapsedGameTime.TotalSeconds);
         _gameSession.Update(frameTime, _inputSource.ReadState());
-        _modelRenderer?.Update(frameTime);
+        if (_modelRenderer is not null)
+        {
+            _modelRenderer.ActiveClipName = _gameSession.ActiveClipName;
+            _modelRenderer.ClipStartSeconds = _gameSession.ClipStartSeconds;
+            if (!string.Equals(_gameSession.ActiveClipName, _loggedClip, StringComparison.Ordinal))
+            {
+                _loggedClip = _gameSession.ActiveClipName;
+                Console.WriteLine($"Erika clip: '{_loggedClip}'");
+            }
+
+            _modelRenderer.Update(frameTime);
+        }
 
         if (_gameSession.ExitRequested)
         {

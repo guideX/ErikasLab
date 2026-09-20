@@ -33,7 +33,10 @@ internal sealed class MonoGameInputSource : IInputSource
                 LookUp: keyboard.IsKeyDown(Keys.Up),
                 LookDown: keyboard.IsKeyDown(Keys.Down),
                 ExitRequested: keyboard.IsKeyDown(Keys.Escape),
-                MouseDelta: Numerics.Vector2.Zero);
+                MouseDelta: Numerics.Vector2.Zero,
+                SelectIdle: keyboard.IsKeyDown(Keys.D1),
+                SelectWalk: keyboard.IsKeyDown(Keys.D2),
+                SelectRun: keyboard.IsKeyDown(Keys.D3));
         }
 
         var bounds = _window.ClientBounds;
@@ -57,6 +60,9 @@ internal sealed class MonoGameInputSource : IInputSource
             LookUp: keyboard.IsKeyDown(Keys.Up),
             LookDown: keyboard.IsKeyDown(Keys.Down),
             ExitRequested: keyboard.IsKeyDown(Keys.Escape),
-            MouseDelta: mouseDelta);
+            MouseDelta: mouseDelta,
+            SelectIdle: keyboard.IsKeyDown(Keys.D1) || keyboard.IsKeyDown(Keys.NumPad1),
+            SelectWalk: keyboard.IsKeyDown(Keys.D2) || keyboard.IsKeyDown(Keys.NumPad2),
+            SelectRun: keyboard.IsKeyDown(Keys.D3) || keyboard.IsKeyDown(Keys.NumPad3));
     }
 }

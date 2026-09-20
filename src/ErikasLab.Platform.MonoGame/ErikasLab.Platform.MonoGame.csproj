@@ -44,14 +44,17 @@
 
   <!--
     MGCB normalizes the out-of-tree canonical source path
-    (Content/../../../erika/...) so the model .xnb lands at
-    Content/erika/idle_looking_around.xnb instead of the task's content
-    output dir. The stock FbxImporter names texture assets relative to the
-    .mgcb working directory (e.g. ../../../home/app/...), so their .xnbs land
-    under src/home/. MonoGame title storage strips '..' segments, so at
-    runtime those resolve under Content/home/app/.... The custom processor
-    additionally emits erika_idle.bin (skeleton + clip) into the MGCB output
-    dir. All three are staged into the app Content/ tree below.
+    (Content/../../../erika/...) so the model .xnbs land at
+    Content/erika/*.xnb instead of the task's content output dir. The stock
+    FbxImporter names texture assets relative to the .mgcb working directory
+    (e.g. ../../../home/app/...), so their .xnbs land under src/home/.
+    MonoGame title storage strips '..' segments, so at runtime those resolve
+    under Content/home/app/.... The custom processor additionally emits one
+    skeleton+clip sidecar per locomotion source (erika_idle/walk/run.bin,
+    ErikaClipCodec v1) into the MGCB output dir. The idle Model plus all
+    three sidecars are staged into the app Content/ tree below; the
+    walking/running Models are build exhaust only (rendering always uses the
+    canonical idle Model + shared 67-bone skeleton).
     All repo-relative; everything under bin/ stays ignored.
   -->
   <Target Name="StageErikaModel" AfterTargets="RunContentBuilder">
@@ -65,6 +68,14 @@
     <Copy
       SourceFiles="Content\bin\Windows\Content\erika_idle.bin"
       DestinationFiles="$(TargetDir)Content\erika\erika_idle.bin"
+      SkipUnchangedFiles="true" />
+    <Copy
+      SourceFiles="Content\bin\Windows\Content\erika_walk.bin"
+      DestinationFiles="$(TargetDir)Content\erika\erika_walk.bin"
+      SkipUnchangedFiles="true" />
+    <Copy
+      SourceFiles="Content\bin\Windows\Content\erika_run.bin"
+      DestinationFiles="$(TargetDir)Content\erika\erika_run.bin"
       SkipUnchangedFiles="true" />
     <Copy
       SourceFiles="@(ErikaTextureXnb)"

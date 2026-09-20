@@ -14,12 +14,28 @@
 
 #---------------------------------- Content ---------------------------------#
 
-# The canonical Erika source FBX lives outside the repo in the ignored local
-# directory D:\dev\ErikasLab\erika (see README.md). Only the single Phase 2B
-# static-render source is referenced here; never add the whole library.
-# The custom processor emits the stock Model plus an erika_idle.bin
-# animation sidecar (skeleton + Take 001 clip).
+# The canonical Erika source FBXs live outside the repo in the ignored local
+# directory D:\dev\ErikasLab\erika (see README.md). Only the three Phase 2D
+# locomotion sources are referenced here; never add the whole library.
+# The custom processor emits the stock Model plus a skeleton+clip animation
+# sidecar per asset (ErikaClipCodec v1, one .bin each).
 #begin idle_looking_around
 /importer:FbxImporter
 /processor:ErikaModelProcessor
+/processorParam:ClipName=idle_looking_around
+/processorParam:SidecarFilename=erika_idle.bin
 /build:../../../erika/idle_looking_around.fbx
+
+#begin walking
+/importer:FbxImporter
+/processor:ErikaModelProcessor
+/processorParam:ClipName=walk
+/processorParam:SidecarFilename=erika_walk.bin
+/build:../../../erika/walking.fbx
+
+#begin running
+/importer:FbxImporter
+/processor:ErikaModelProcessor
+/processorParam:ClipName=run
+/processorParam:SidecarFilename=erika_run.bin
+/build:../../../erika/running.fbx

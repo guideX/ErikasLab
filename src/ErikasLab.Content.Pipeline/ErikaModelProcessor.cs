@@ -9,12 +9,14 @@ namespace ErikasLab.Content.Pipeline;
 /// <summary>
 /// Stock <see cref="ModelProcessor"/> behavior for the runtime <c>Model</c>
 /// plus a portable animation sidecar: extracts the canonical skeleton (from the
-/// import DOM) and the Take 001 clip (re-imported raw via Assimp) and writes
-/// them (via <see cref="ErikaClipCodec"/>) to a deterministic
-/// <c>erika_idle.bin</c> sidecar registered with
-/// <see cref="ContentProcessorContext.AddOutputFile"/>.
-/// Fails loudly on unmapped bones, unexpected scales, or unsorted keys instead
-/// of silently producing corrupt clips.
+/// import DOM) and one clip (re-imported raw via Assimp) and writes them (via
+/// <see cref="ErikaClipCodec"/>) to a deterministic <c>.bin</c> sidecar
+/// registered with <see cref="ContentProcessorContext.AddOutputFile"/>.
+/// Multi-clip (Phase 2D): the same processor builds idle/walk/run sidecars;
+/// per-asset <c>ClipName</c>/<c>SidecarFilename</c> processor parameters select
+/// the stable clip identifier and output file. Fails loudly on unmapped bones,
+/// unexpected scales, or unsorted keys instead of silently producing corrupt
+/// clips.
 ///
 /// Animation note: stock MonoGame <c>AnimationContent</c> strips FBX joint
 /// orientation (pre-rotation pivots) from keys (e.g. UpLeg bind 180 deg becomes
@@ -29,9 +31,19 @@ namespace ErikasLab.Content.Pipeline;
 [ContentProcessor(DisplayName = "Erika model + skeletal animation")]
 public sealed class ErikaModelProcessor : ModelProcessor
 {
-    public const string ClipName = "Take 001";
+    /// <summary>
+    /// Stable clip identifier written into the sidecar (e.g.
+    /// <c>idle_looking_around</c>, <c>walk</c>, <c>run</c>). Set per MGCB
+    /// asset via <c>/processorParam:ClipName=...</c>.
+    /// </summary>
+    public string ClipName { get; set; } = "idle_looking_around";
 
-    public const string SidecarFilename = "erika_idle.bin";
+    /// <summary>
+    /// Sidecar file name emitted into the content output directory (e.g.
+    /// <c>erika_idle.bin</c>). Set per MGCB asset via
+    /// <c>/processorParam:SidecarFilename=...</c>.
+    /// </summary>
+    public string SidecarFilename { get; set; } = "erika_idle.bin";
 
     private const float SourceFramesPerSecond = 30f;
     private const float ScaleTolerance = 1e-3f;
@@ -42,6 +54,20 @@ public sealed class ErikaModelProcessor : ModelProcessor
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(context);
 
+        if (string.IsNullOrWhiteSpace(ClipName))
+        {
+            throw new InvalidContentException("ErikaModelProcessor requires a non-empty ClipName.", input.Identity);
+        }
+
+        if (string.IsNullOrWhiteSpace(SidecarFilename)
+            || SidecarFilename.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+            || SidecarFilename.Contains('/') || SidecarFilename.Contains('\\'))
+        {
+            throw new InvalidContentException(
+                $"ErikaModelProcessor requires a plain SidecarFilename, got '{SidecarFilename}'.",
+                input.Identity);
+        }
+
         // Extract before the base processor is allowed to reshape the DOM.
         var animation = ExtractAnimation(input, context);
         WriteSidecar(animation, context);
@@ -49,7 +75,7 @@ public sealed class ErikaModelProcessor : ModelProcessor
         return base.Process(input, context);
     }
 
-    private static void WriteSidecar(SkeletalAnimation animation, ContentProcessorContext context)
+    private void WriteSidecar(SkeletalAnimation animation, ContentProcessorContext context)
     {
         // Written straight to the content output directory (a config-stable
         // location the build stages into the app); also registered so MGCB
@@ -64,7 +90,7 @@ public sealed class ErikaModelProcessor : ModelProcessor
         context.AddOutputFile(path);
     }
 
-    private static SkeletalAnimation ExtractAnimation(NodeContent input, ContentProcessorContext context)
+    private SkeletalAnimation ExtractAnimation(NodeContent input, ContentProcessorContext context)
     {
         var skeleton = BuildSkeleton(input, context);
         var clip = BuildClipRaw(input, skeleton, context);
@@ -119,7 +145,7 @@ public sealed class ErikaModelProcessor : ModelProcessor
         }
     }
 
-    private static AnimationClip BuildClipRaw(
+    private AnimationClip BuildClipRaw(
         NodeContent input, Skeleton skeleton, ContentProcessorContext context)
     {
         var sourcePath = input.Identity.SourceFilename;
@@ -157,13 +183,21 @@ public sealed class ErikaModelProcessor : ModelProcessor
 
         // Mixamo files carry takes 'Take 001' + 'mixamo.com' as animation
         // stacks; Assimp exposes the single stack (here 'mixamo.com').
-        // There is exactly one animation; name the clip canonically.
+        // There is exactly one animation; name the clip by the stable
+        // ClipName parameter (idle_looking_around/walk/run).
         var aiAnimation = scene.Animations[0];
         if (scene.AnimationCount != 1)
         {
             context.Logger.LogImportantMessage(
                 "Erika animation: {0} stacks, using '{1}' as '{2}'.",
                 scene.AnimationCount, aiAnimation.Name, ClipName);
+        }
+
+        if (Math.Abs(aiAnimation.TicksPerSecond - SourceFramesPerSecond) > 0.01)
+        {
+            throw new InvalidContentException(
+                $"Clip '{ClipName}' has unexpected rate {aiAnimation.TicksPerSecond} ticks/s (expected {SourceFramesPerSecond}).",
+                input.Identity);
         }
 
         var durationSeconds = (float)(aiAnimation.DurationInTicks / aiAnimation.TicksPerSecond);
@@ -181,8 +215,8 @@ public sealed class ErikaModelProcessor : ModelProcessor
         {
             if (!skeleton.TryGetBoneIndex(aiChannel.NodeName, out var boneIndex))
             {
-                // Raw animation also animates no skeleton-external nodes for
-                // this source (51 channels, all bone-level); fail loudly if
+                // Raw animation must animate only skeleton bones for the base
+                // variant (51-52 channels, all bone-level); fail loudly if
                 // that ever changes instead of silently dropping motion.
                 throw new InvalidContentException(
                     $"Animation channel '{aiChannel.NodeName}' matches no skeleton bone " +

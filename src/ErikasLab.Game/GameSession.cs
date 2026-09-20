@@ -20,10 +20,42 @@ public sealed class GameSession
 
     public bool ExitRequested { get; private set; }
 
+    /// <summary>
+    /// Phase 2D validation selector: which of the three clips the skeletal
+    /// renderer should play. Hard switch only; no blending/state machine.
+    /// Defaults to idle; 1/2/3 select idle/walk/run and reset playback
+    /// deterministically to the loop start.
+    /// </summary>
+    public string ActiveClipName { get; private set; } = ErikaFigure.IdleClipName;
+
+    /// <summary>Absolute game-clock time the active clip started (loop origin).</summary>
+    public double ClipStartSeconds { get; private set; }
+
     public void Update(FrameTime frameTime, InputState input)
     {
         ExitRequested |= input.ExitRequested;
         _cameraController.Update(Camera, input, frameTime);
+
+        string? requested = null;
+        if (input.SelectIdle)
+        {
+            requested = ErikaFigure.IdleClipName;
+        }
+        else if (input.SelectWalk)
+        {
+            requested = ErikaFigure.WalkClipName;
+        }
+        else if (input.SelectRun)
+        {
+            requested = ErikaFigure.RunClipName;
+        }
+
+        if (requested is not null
+            && !string.Equals(requested, ActiveClipName, StringComparison.Ordinal))
+        {
+            ActiveClipName = requested;
+            ClipStartSeconds = frameTime.TotalSeconds;
+        }
     }
 
     public void Resize(int width, int height)

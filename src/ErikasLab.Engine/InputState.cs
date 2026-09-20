@@ -12,7 +12,10 @@ public readonly record struct InputState(
     bool LookUp,
     bool LookDown,
     bool ExitRequested,
-    Vector2 MouseDelta);
+    Vector2 MouseDelta,
+    bool SelectIdle = false,
+    bool SelectWalk = false,
+    bool SelectRun = false);
 
 public interface IInputSource
 {

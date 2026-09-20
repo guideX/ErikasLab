@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ErikasLab.Engine\ErikasLab.Engine.csproj" />
+    <ProjectReference Include="..\ErikasLab.Game\ErikasLab.Game.csproj" />
   </ItemGroup>
 
 </Project>
