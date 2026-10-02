@@ -28,14 +28,14 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
 
         Content.RootDirectory = "Content";
         IsMouseVisible = false;
-        Window.Title = "Erika's Lab - Phase 2E";
+        Window.Title = "Erika's Lab - Phase 2F";
         Window.AllowUserResizing = true;
         Window.ClientSizeChanged += OnClientSizeChanged;
     }
 
     protected override void Initialize()
     {
-        Console.WriteLine("Erika's Lab | Phase 2E | initializing");
+        Console.WriteLine("Erika's Lab | Phase 2F | initializing");
         Console.WriteLine($"Runtime: {RuntimeInformation.FrameworkDescription} ({RuntimeInformation.ProcessArchitecture})");
         base.Initialize();
     }
@@ -100,6 +100,7 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
         {
             _modelRenderer.ActiveClipName = _gameSession.ActiveClipName;
             _modelRenderer.ClipStartSeconds = _gameSession.ClipStartSeconds;
+            _modelRenderer.Transition = _gameSession.Transition;
             if (!string.Equals(_gameSession.ActiveClipName, _loggedClip, StringComparison.Ordinal))
             {
                 _loggedClip = _gameSession.ActiveClipName;

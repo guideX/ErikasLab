@@ -39,9 +39,10 @@ internal sealed class AnimatedModelRenderer
     /// Advances playback. Uses the absolute game clock (not accumulated
     /// deltas), so long runs cannot drift; looping is exact modulo math.
     /// The host copies <see cref="GameSession.ActiveClipName"/> /
-    /// <see cref="GameSession.ClipStartSeconds"/> here each frame; switching
-    /// clips resets to the loop start deterministically (hard switch, no
-    /// blending). Elapsed for the active clip is Total - Start.
+    /// <see cref="GameSession.ClipStartSeconds"/> / <see cref="GameSession.Transition"/>
+    /// here each frame. When a transition is in flight both clips are evaluated
+    /// and blended; otherwise the active clip renders alone. Elapsed for any
+    /// clip is Total - its loop origin.
     /// </summary>
     public void Update(FrameTime frameTime)
     {
@@ -56,6 +57,13 @@ internal sealed class AnimatedModelRenderer
 
     /// <summary>Absolute game-clock origin of the active clip loop. Set by the host from the session.</summary>
     public double ClipStartSeconds { get; set; }
+
+    /// <summary>
+    /// Phase 2F in-flight crossfade (or null). Set by the host from the session.
+    /// Purely visual: the renderer blends the two local poses, while world root
+    /// motion stays owned by <see cref="GameSession"/>.
+    /// </summary>
+    public AnimationTransition? Transition { get; set; }
 
     public void Draw(Scene scene, Matrix view, Matrix projection)
     {
@@ -151,33 +159,17 @@ internal sealed class AnimatedModelRenderer
 
     private void DrawAnimated(PreparedCharacter prepared, Matrix world, Matrix view, Matrix projection)
     {
-        var clip = prepared.ClipFor(ActiveClipName);
-        var elapsed = prepared.TotalSeconds - ClipStartSeconds;
-        var time = clip.NormalizeTime(elapsed);
-
         // Raw Assimp keys are full parent-relative locals (FBX pivots baked),
         // matching BoneContent bind space. Standard hierarchical path: sample
-        // locals, resolve absolute via parents, skin with inverseBind * absolute.
-        AnimationEvaluator.EvaluateLocal(
-            prepared.Skeleton!, clip, time, prepared.Local);
-
-        // Phase 2E root-motion consumption: horizontal Hips travel already
-        // drives the character world transform in GameSession, so pin rendered
-        // Hips X/Z to the clip start reference (preserving Y, rotation, and
-        // the remaining hierarchy) to avoid double application. Idle stays
-        // verbatim (stationary, small drift only).
-        if (prepared.HipsBoneIndex >= 0)
+        // locals (single clip or a crossfade blend), resolve absolute via
+        // parents, skin with inverseBind * absolute.
+        if (Transition is { } transition && !transition.IsCompleteAt(prepared.TotalSeconds))
         {
-            if (string.Equals(ActiveClipName, ErikaFigure.WalkClipName, StringComparison.Ordinal))
-            {
-                prepared.Local[prepared.HipsBoneIndex].M41 = prepared.WalkStart.X;
-                prepared.Local[prepared.HipsBoneIndex].M43 = prepared.WalkStart.Z;
-            }
-            else if (string.Equals(ActiveClipName, ErikaFigure.RunClipName, StringComparison.Ordinal))
-            {
-                prepared.Local[prepared.HipsBoneIndex].M41 = prepared.RunStart.X;
-                prepared.Local[prepared.HipsBoneIndex].M43 = prepared.RunStart.Z;
-            }
+            EvaluateCrossfade(prepared, transition);
+        }
+        else
+        {
+            EvaluateSingle(prepared);
         }
 
         AnimationEvaluator.EvaluateAbsolute(
@@ -200,6 +192,97 @@ internal sealed class AnimatedModelRenderer
         {
             mesh.Draw();
         }
+    }
+
+    /// <summary>
+    /// Single-clip path (Phase 2E preserved): evaluate the active clip's local
+    /// pose and pin consumed walk/run Hips X/Z to the clip start reference.
+    /// </summary>
+    private void EvaluateSingle(PreparedCharacter prepared)
+    {
+        var clip = prepared.ClipFor(ActiveClipName);
+        var time = clip.NormalizeTime(prepared.TotalSeconds - ClipStartSeconds);
+        AnimationEvaluator.EvaluateLocal(prepared.Skeleton!, clip, time, prepared.Local);
+
+        if (prepared.HipsBoneIndex >= 0)
+        {
+            if (string.Equals(ActiveClipName, ErikaFigure.WalkClipName, StringComparison.Ordinal))
+            {
+                prepared.Local[prepared.HipsBoneIndex].M41 = prepared.WalkStart.X;
+                prepared.Local[prepared.HipsBoneIndex].M43 = prepared.WalkStart.Z;
+            }
+            else if (string.Equals(ActiveClipName, ErikaFigure.RunClipName, StringComparison.Ordinal))
+            {
+                prepared.Local[prepared.HipsBoneIndex].M41 = prepared.RunStart.X;
+                prepared.Local[prepared.HipsBoneIndex].M43 = prepared.RunStart.Z;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Phase 2F crossfade path: evaluate the outgoing and incoming clips at their
+    /// own loop phases, neutralize each locomotion pose's consumed Hips X/Z to
+    /// its own clip start, then blend bone-by-bone. Alpha 0 reproduces the source
+    /// pose and alpha 1 the destination pose exactly, so both endpoints stay
+    /// continuous with the single-clip path; neither pose adds a second world
+    /// root delta (that stays in <see cref="GameSession"/>).
+    /// </summary>
+    private static void EvaluateCrossfade(PreparedCharacter prepared, AnimationTransition transition)
+    {
+        var sourceClip = prepared.ClipFor(transition.SourceClipName);
+        var destinationClip = prepared.ClipFor(transition.DestinationClipName);
+        var sourceTime = sourceClip.NormalizeTime(prepared.TotalSeconds - transition.SourceClipStartSeconds);
+        var destinationTime = destinationClip.NormalizeTime(
+            prepared.TotalSeconds - transition.DestinationClipStartSeconds);
+
+        AnimationEvaluator.EvaluateLocalTransforms(
+            prepared.Skeleton!, sourceClip, sourceTime,
+            prepared.SourceTranslations, prepared.SourceRotations);
+        AnimationEvaluator.EvaluateLocalTransforms(
+            prepared.Skeleton!, destinationClip, destinationTime,
+            prepared.DestinationTranslations, prepared.DestinationRotations);
+
+        NeutralizeLocomotionHips(prepared, transition.SourceClipName, prepared.SourceTranslations);
+        NeutralizeLocomotionHips(prepared, transition.DestinationClipName, prepared.DestinationTranslations);
+
+        PoseBlender.BlendLocal(
+            prepared.SourceTranslations,
+            prepared.SourceRotations,
+            prepared.DestinationTranslations,
+            prepared.DestinationRotations,
+            transition.ProgressAt(prepared.TotalSeconds),
+            prepared.Local);
+    }
+
+    /// <summary>
+    /// Pin consumed walk/run Hips X/Z to the clip start (Phase 2E policy),
+    /// preserving sampled Y; idle stays verbatim. Applied per participating pose
+    /// so a blend cannot reintroduce consumed travel.
+    /// </summary>
+    private static void NeutralizeLocomotionHips(
+        PreparedCharacter prepared, string clipName, Numerics.Vector3[] translations)
+    {
+        if (prepared.HipsBoneIndex < 0)
+        {
+            return;
+        }
+
+        Numerics.Vector3 start;
+        if (string.Equals(clipName, ErikaFigure.WalkClipName, StringComparison.Ordinal))
+        {
+            start = prepared.WalkStart;
+        }
+        else if (string.Equals(clipName, ErikaFigure.RunClipName, StringComparison.Ordinal))
+        {
+            start = prepared.RunStart;
+        }
+        else
+        {
+            return;
+        }
+
+        var hips = translations[prepared.HipsBoneIndex];
+        translations[prepared.HipsBoneIndex] = new Numerics.Vector3(start.X, hips.Y, start.Z);
     }
 
     private PreparedCharacter GetOrPrepare(ModelInstance instance)
@@ -432,6 +515,10 @@ internal sealed class AnimatedModelRenderer
             Local = new Numerics.Matrix4x4[skeleton.BoneCount],
             Absolute = new Numerics.Matrix4x4[skeleton.BoneCount],
             Skin = new Numerics.Matrix4x4[skeleton.BoneCount],
+            SourceTranslations = new Numerics.Vector3[skeleton.BoneCount],
+            SourceRotations = new Numerics.Quaternion[skeleton.BoneCount],
+            DestinationTranslations = new Numerics.Vector3[skeleton.BoneCount],
+            DestinationRotations = new Numerics.Quaternion[skeleton.BoneCount],
             PartEffects = partEffects,
             BindDeviation = deviation,
         };
@@ -700,6 +787,16 @@ internal sealed class AnimatedModelRenderer
         public Numerics.Matrix4x4[] Absolute { get; init; } = [];
 
         public Numerics.Matrix4x4[] Skin { get; init; } = [];
+
+        /// <summary>Reusable crossfade scratch (Phase 2F): outgoing local TRS.</summary>
+        public Numerics.Vector3[] SourceTranslations { get; init; } = [];
+
+        public Numerics.Quaternion[] SourceRotations { get; init; } = [];
+
+        /// <summary>Reusable crossfade scratch (Phase 2F): incoming local TRS.</summary>
+        public Numerics.Vector3[] DestinationTranslations { get; init; } = [];
+
+        public Numerics.Quaternion[] DestinationRotations { get; init; } = [];
 
         public List<(ModelMesh Mesh, SkinnedEffect Effect)> PartEffects { get; init; } = [];
 

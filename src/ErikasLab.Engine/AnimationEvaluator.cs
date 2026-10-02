@@ -56,6 +56,53 @@ public static class AnimationEvaluator
     }
 
     /// <summary>
+    /// Local (parent-space) translation/rotation for every bone at
+    /// <paramref name="timeSeconds"/>. Same sampling and bind fallback as
+    /// <see cref="EvaluateLocal"/>, but kept in TRS form so callers (e.g. the
+    /// Phase 2F pose blender) can interpolate without decomposing matrices.
+    /// Unanimated bones use bind.
+    /// </summary>
+    public static void EvaluateLocalTransforms(
+        Skeleton skeleton,
+        AnimationClip clip,
+        float timeSeconds,
+        Vector3[] translations,
+        Quaternion[] rotations)
+    {
+        ArgumentNullException.ThrowIfNull(skeleton);
+        ArgumentNullException.ThrowIfNull(clip);
+        ArgumentNullException.ThrowIfNull(translations);
+        ArgumentNullException.ThrowIfNull(rotations);
+        if (translations.Length != skeleton.BoneCount || rotations.Length != skeleton.BoneCount)
+        {
+            throw new ArgumentException("Destination arrays must match the bone count.");
+        }
+
+        for (var i = 0; i < skeleton.BoneCount; i++)
+        {
+            translations[i] = skeleton.Bones[i].BindTranslation;
+            rotations[i] = skeleton.Bones[i].BindRotation;
+        }
+
+        foreach (var channel in clip.Channels)
+        {
+            if (channel.BoneIndex < 0 || channel.BoneIndex >= skeleton.BoneCount)
+            {
+                throw new InvalidOperationException(
+                    $"Channel targets bone index {channel.BoneIndex} outside the skeleton.");
+            }
+
+            var bone = skeleton.Bones[channel.BoneIndex];
+            translations[channel.BoneIndex] = channel.HasTranslation
+                ? channel.SampleTranslation(timeSeconds)
+                : bone.BindTranslation;
+            rotations[channel.BoneIndex] = channel.HasRotation
+                ? channel.SampleRotation(timeSeconds)
+                : bone.BindRotation;
+        }
+    }
+
+    /// <summary>
     /// Absolute (model-space) matrices from local ones via the skeleton hierarchy.
     /// </summary>
     public static void EvaluateAbsolute(

@@ -9,6 +9,21 @@ public sealed class GameSession
 
     private readonly CameraController _cameraController = new();
 
+    /// <summary>
+    /// Phase 2F centralized locomotion crossfade duration. One short blend for
+    /// every idle/walk/run transition; chosen at 0.20 s (inside the 0.15-0.25 s
+    /// range) so pose changes read as continuous without delaying movement.
+    /// Elapsed-time based, therefore frame-rate independent.
+    /// </summary>
+    public const float LocomotionBlendDurationSeconds = 0.20f;
+
+    /// <summary>
+    /// Phase 2F centralized yaw turn speed: 4π rad/s (~720°/s). A 180° reversal
+    /// takes 0.25 s and a 90° turn 0.125 s, roughly matching the crossfade
+    /// window. Constant angular speed, shortest path, no overshoot.
+    /// </summary>
+    public const float TurnSpeedRadiansPerSecond = MathF.PI * 4f;
+
     private AnimationClip? _walkClip;
     private AnimationClip? _runClip;
     private int _hipsBoneIndex = -1;
@@ -31,21 +46,33 @@ public sealed class GameSession
 
     /// <summary>
     /// Phase 2E locomotion selection: idle/walk/run via movement intent
-    /// (WASD + Shift) with 1/2/3 retained as a diagnostic latch. Hard switch
-    /// only; no blending/state machine. Defaults to idle.
-    /// Movement takes precedence over diagnostics; releasing movement returns
-    /// to idle unless the last selection was diagnostic (which latches,
-    /// preserving Phase 2D behavior for headless/diagnostic runs).
+    /// (WASD + Shift) with 1/2/3 retained as a diagnostic latch. Defaults to
+    /// idle. Movement takes precedence over diagnostics; releasing movement
+    /// returns to idle unless the last selection was diagnostic (which
+    /// latches, preserving Phase 2D behavior for headless/diagnostic runs).
+    /// Phase 2F layers a single short crossfade on top; the active clip is
+    /// always the destination (root-motion authority).
     /// </summary>
     public string ActiveClipName { get; private set; } = ErikaFigure.IdleClipName;
 
     /// <summary>Absolute game-clock time the active clip started (loop origin).</summary>
     public double ClipStartSeconds { get; private set; }
 
+    /// <summary>
+    /// Phase 2F in-flight crossfade, or null when a single clip renders. At most
+    /// one transition exists; interruptions replace it (no graph, no history).
+    /// The renderer evaluates both poses and blends them, but world root motion
+    /// is always driven by <see cref="ActiveClipName"/> alone.
+    /// </summary>
+    public AnimationTransition? Transition { get; private set; }
+
     /// <summary>World-space (meters) Erika origin. Y stays at ground (0).</summary>
     public Vector3 ErikaPosition { get; private set; } = ErikaFigure.GroundPosition;
 
-    /// <summary>Yaw (radians, Y-up) Erika faces. Snapped to movement heading.</summary>
+    /// <summary>
+    /// Yaw (radians, Y-up) Erika faces. Phase 2F smoothly turns toward movement
+    /// heading at <see cref="TurnSpeedRadiansPerSecond"/>; stationary retains it.
+    /// </summary>
     public float ErikaYawRadians { get; private set; } = ErikaFigure.FacingYawRadians;
 
     /// <summary>
@@ -65,6 +92,7 @@ public sealed class GameSession
         _walkClip = walkClip;
         _runClip = runClip;
         _previousClipElapsed = 0;
+        Transition = null;
     }
 
     /// <summary>
@@ -170,39 +198,41 @@ public sealed class GameSession
 
         if (!string.Equals(requested, ActiveClipName, StringComparison.Ordinal))
         {
-            // Hard switch: new loop origin, reset root-motion bookkeeping so no
-            // stale previous-clip displacement leaks into the new clip.
-            // Position/yaw otherwise untouched (no teleport).
-            ActiveClipName = requested;
-            ClipStartSeconds = frameTime.TotalSeconds;
-            _previousClipElapsed = 0;
+            // Phase 2F: start/replace a single short crossfade. The destination
+            // becomes the root-motion authority immediately; the source is kept
+            // only as a visual pose contributor. Position/yaw stay untouched
+            // (no teleport) and StartTransition seeds _previousClipElapsed so no
+            // stale previous-clip displacement leaks in.
+            StartTransition(requested, frameTime.TotalSeconds);
             _diagnosticLatch = requestedViaDiagnostic;
-            if (hasMovement)
-            {
-                var yaw = MathF.Atan2(intent.X, intent.Z);
-                if (float.IsFinite(yaw))
-                {
-                    ErikaYawRadians = yaw;
-                }
-            }
-
-            SyncErikaInstance();
-            return;
         }
-
-        // Same clip: never restart the loop origin.
-        if (hasMovement)
+        else if (hasMovement)
         {
             _diagnosticLatch = false;
-            var yaw = MathF.Atan2(intent.X, intent.Z);
-            if (float.IsFinite(yaw))
-            {
-                ErikaYawRadians = yaw;
-            }
         }
         else if (diagnostic is not null)
         {
             _diagnosticLatch = true;
+        }
+
+        // Phase 2F smooth yaw: turn toward movement intent at a constant angular
+        // speed (shortest path, no overshoot). Root displacement below therefore
+        // follows the *smoothed* facing, producing curved travel while turning.
+        // Stationary Erika keeps her current facing.
+        if (hasMovement)
+        {
+            var targetYaw = MathF.Atan2(intent.X, intent.Z);
+            if (float.IsFinite(targetYaw))
+            {
+                ErikaYawRadians = YawSmoothing.StepTowards(
+                    ErikaYawRadians, targetYaw, TurnSpeedRadiansPerSecond * (float)frameTime.DeltaSeconds);
+            }
+        }
+
+        // Retire a finished crossfade so normal single-clip rendering resumes.
+        if (Transition is { } active && active.IsCompleteAt(frameTime.TotalSeconds))
+        {
+            Transition = null;
         }
 
         var currentElapsed = frameTime.TotalSeconds - ClipStartSeconds;
@@ -212,7 +242,9 @@ public sealed class GameSession
         }
 
         // Authored root motion is the locomotion authority (no magic speed).
-        // Idle never moves (its small Hips drift stays skeletal only).
+        // Only the destination (ActiveClipName) clip contributes; a transition's
+        // source pose never adds a second root delta. Idle never moves (its
+        // small Hips drift stays skeletal only).
         if (HasRootMotionData() && IsLocomotionClip(ActiveClipName))
         {
             var clip = string.Equals(ActiveClipName, ErikaFigure.RunClipName, StringComparison.Ordinal)
@@ -236,6 +268,60 @@ public sealed class GameSession
 
         _previousClipElapsed = currentElapsed;
         SyncErikaInstance();
+    }
+
+    /// <summary>
+    /// Begin (or replace) the single in-flight crossfade to
+    /// <paramref name="requested"/> and make it the root-motion authority.
+    ///
+    /// Interruption policy (bounded, at most one transition):
+    /// - returning to the current source (e.g. releasing mid idle→walk) reverses
+    ///   the blend: source and destination swap and the progress is remapped to
+    ///   1 - progress, so the visible pose is continuous and no pop occurs;
+    /// - any other change chains from the previous destination (the currently
+    ///   authoritative clip) with a fresh blend, keeping state bounded.
+    ///
+    /// <c>_previousClipElapsed</c> is seeded to the destination's current phase
+    /// so the switch frame applies zero root delta and resuming a mid-loop clip
+    /// never replays historical travel.
+    /// </summary>
+    private void StartTransition(string requested, double now)
+    {
+        var sourceName = ActiveClipName;
+        var sourceStart = ClipStartSeconds;
+        var destinationStart = now;
+        var transitionStart = now;
+
+        if (Transition is { } current)
+        {
+            if (string.Equals(requested, current.SourceClipName, StringComparison.Ordinal))
+            {
+                // Reverse: continue from the same visible pose with swapped ends.
+                sourceName = current.DestinationClipName;
+                sourceStart = current.DestinationClipStartSeconds;
+                destinationStart = current.SourceClipStartSeconds;
+                var alpha = current.ProgressAt(now);
+                transitionStart = now - (1.0 - alpha) * LocomotionBlendDurationSeconds;
+            }
+            else
+            {
+                sourceName = current.DestinationClipName;
+                sourceStart = current.DestinationClipStartSeconds;
+            }
+        }
+
+        ActiveClipName = requested;
+        ClipStartSeconds = destinationStart;
+        Transition = new AnimationTransition(
+            sourceName,
+            sourceStart,
+            requested,
+            destinationStart,
+            transitionStart,
+            LocomotionBlendDurationSeconds);
+
+        var elapsed = now - destinationStart;
+        _previousClipElapsed = elapsed < 0 ? 0 : elapsed;
     }
 
     public void Resize(int width, int height)

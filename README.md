@@ -90,6 +90,21 @@ pinned to clip start (Y/rotation/hierarchy preserved) and idle stationary.
 `1`/`2`/`3` remain as a non-interfering diagnostic latch. No blending, IK,
 physics, combat, jumping, or new assets.
 
+Phase 2F adds: short skeletal crossfades and smooth turning on top of the Phase
+2E locomotion, without changing root-motion authority. A single bounded
+`AnimationTransition` (source/destination clip + loop origins + clock) drives a
+`PoseBlender` that interpolates local TRS bone-by-bone (linear translation,
+normalized shortest-path quaternion rotation), so `AnimatedModelRenderer`
+evaluates both poses and blends them; alpha 0 reproduces the source pose and
+alpha 1 the destination exactly. Crossfades are 0.20 s, elapsed-time based
+(frame-rate independent). Yaw now turns toward movement intent at a centralized
+4π rad/s (~720°/s) along the shortest wrapped path with no overshoot, and world
+root displacement follows the smoothed facing (curved travel while turning).
+Interruptions replace the single transition (releasing mid-blend reverses it by
+swapping ends and remapping progress to `1 - alpha`), so no pop, no teleport, no
+double root motion, and no unbounded state. Idle stays root-suppressed; `1`/`2`/`3`
+diagnostics are unchanged.
+
 Meshes are generated in code for the proof scene, and canonical Erika arrives through the content pipeline described below, so no manual asset authoring is required yet.
 
 ## Erika content (Phase 2B)
@@ -191,22 +206,30 @@ no scale; Hips is the sole translation track):
   Measured with the shipped sidecars: walk 184.50 units = 1.741 m per 1.0333 s
   loop (~1.685 m/s); run 374.79 units = 3.538 m per 0.6333 s loop (~5.586 m/s).
   Idle net is ~0. No loop snap-back; transitions (idle/walk/run, direction changes)
-  apply no stale delta and do not teleport.
+  apply no stale delta and do not teleport. During a Phase 2F crossfade only the
+  destination clip is authoritative; the outgoing pose is visual-only, and each
+  participating locomotion pose has its consumed Hips X/Z pinned to its own clip
+  start before blending, so neither end adds a second root delta.
 - Playback: idle auto-starts; movement selects walk/run (Shift sprints) and
   `1`/`2`/`3` remain as a diagnostic latch (movement takes precedence), each
   switch resetting deterministically to the loop start (`GameSession.ActiveClipName`/
   `ClipStartSeconds`, elapsed = absolute clock − start, root bookkeeping reset so
-  no stale delta leaks). Holding a state never restarts the loop. Every clip loops
-  exactly, advances on the absolute game clock (no drift), is frame-rate independent;
-  no per-frame FBX parsing/loading, no GPU recreation, caller-provided arrays only
-  (no per-frame allocations), no per-frame console output (one line per
-  switch only).
+  no stale delta leaks); an interruption reversal instead resumes the returning
+  clip's phase for continuity. Phase 2F starts a 0.20 s `AnimationTransition` on
+  every switch; holding a state never restarts the loop and a finished transition
+  retires so single-clip rendering resumes. Heading turns smoothly at 4π rad/s
+  (shortest wrapped path, clamped at the target) and root travel follows the
+  smoothed facing. Every clip loops exactly, advances on the absolute game clock
+  (no drift), is frame-rate independent; no per-frame FBX parsing/loading, no GPU
+  recreation, caller-provided arrays only (no per-frame allocations), no per-frame
+  console output (one line per switch only).
 - Renderer: `AnimatedModelRenderer` replaces `SkinnedEffect` onto the 4
   imported parts (weights per vertex from the declaration), preserving all 4
   diffuse textures, depth, lighting, and world rendering; static path retained
   for non-Erika models. Engine/Game stay free of MonoGame/Windows types.
-- Limitations: three clips with hard switches only; no blending,
-  acceleration/deceleration, turn animations (headings snap), strafing/backwards
+- Limitations: three clips with short crossfades (no blend trees/state machine);
+  no acceleration/deceleration, turn-in-place/lean animations (headings turn at a
+  constant rate), strafing/backwards
   clips (Erika faces the heading and uses the forward clip), foot IK, layers,
   retargeting, physics, collision/gravity/jumping, or movement. WASD drives Erika
   camera-relatively (default camera: W=-Z, S=+Z, A=-X, D=+X); the camera itself
@@ -216,7 +239,7 @@ no scale; Hips is the sole translation track):
 
 ## Deferred work
 
-Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation blending/state machines, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. The smallest logical next step is animation blending (short crossfades on locomotion switches plus turn-rate smoothing) without changing the root-motion authority established here.
+Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation state machines/blend trees, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. Phase 2F covered short crossfades and turn-rate smoothing; the smallest logical next step is a small movement-feel pass (acceleration/deceleration and turn-in-place) that still leaves root-motion authority unchanged, or dedicated strafe/backward clips if the animation set is expanded.
 
 ## Repository hygiene
 
