@@ -114,6 +114,17 @@ instead of flying. WASD stays camera-relative (basis = horizontal orbit
 forward/right), Erika keeps her own smoothed facing, and camera pitch never adds
 vertical travel. Camera collision is intentionally deferred.
 
+Phase 2H adds: camera-targeting and spawn-facing consistency. The rendered view
+is now a true look-at (`camera.Forward = normalize(target - camera.Position)`),
+so Erika stays centred while only the camera *position* trails; the
+orbit/control basis (`ControlForward`/`ControlRight`, yaw-only) is separate and
+is what WASD uses, so follow lag can never bend movement intent. Erika spawns
+facing the exact direction initial `W` requests (derived from the camera
+convention, not a hard-coded turn), so the game no longer opens in front of a
+character who immediately turns 180°. Degenerate camera-at-target cases fall
+back to the orbit basis (finite, roll-free). Root motion, crossfades, loop
+seams, and orbit/facing independence are unchanged.
+
 Meshes are generated in code for the proof scene, and canonical Erika arrives through the content pipeline described below, so no manual asset authoring is required yet.
 
 ## Erika content (Phase 2B)
@@ -246,20 +257,33 @@ no scale; Hips is the sole translation track):
   match the canonical 67 joints (names, parents, bind pose) or content load
   fails loudly.
 
-## Third-person camera (Phase 2G)
+## Third-person camera (Phase 2G, refined in 2H)
 
 Erika is followed by a compact portable rig (`ThirdPersonCamera`, Engine) that
 owns only orbit angles, follow distance, look-at height, and the smoothed camera
 position; `GameSession` keeps Erika's position/facing and `CameraState` is the
 final view the renderer consumes. The renderer never computes follow behavior.
 
+- Two bases (Phase 2H). The **orbit/control basis**
+  (`ControlForward`/`ControlRight`) is horizontal, derived from orbit yaw only,
+  and is what WASD means. The **rendered view basis** (`camera.Forward`) is the
+  physical look direction, recomputed each frame as
+  `normalize(target - camera.Position)`. Position may lag; orientation tracks
+  the target, so Erika stays centred during walk/run/turn/orbit.
 - Model: `target = ErikaPosition + (0, 1.25, 0)`; `desired = target -
-  orbitForward * 4.5`; `camera.Forward` is the player-controlled orbit basis, so
-  at rest it equals `normalize(target - camera.Position)`.
+  orbitForward * 4.5`; `camera.Position` smooths toward `desired`; then the view
+  is pointed at `target` from that smoothed position.
+- Degenerate handling: if the camera position and target coincide (or the vector
+  is non-finite), the view falls back to the orbit forward basis instead of
+  normalizing a zero vector, so all camera vectors stay finite and roll-free.
 - Initial framing: distance 4.50 m, look-at height 1.25 m, orbit yaw 0.00 rad
   (along the Phase 1 forward, -Z, behind the initial movement heading), pitch
   -0.28 rad (~-16 deg, slightly above and looking down). Spawn snaps to this
   frame (no fly-in).
+- Spawn facing (Phase 2H): Erika's initial yaw is derived from the initial
+  control forward (`yaw = atan2(direction.X, direction.Z)`), so she starts
+  facing exactly the direction initial `W` requests and the game does not open
+  on a 180° correction.
 - Orbit: mouse (0.0025 rad/px) and arrow keys (1.7 rad/s) drive yaw/pitch; yaw
   wraps to (-pi, pi] with no boundary jump and pitch clamps to [-1.20, +0.50]
   rad (~-68.8 deg to +28.6 deg) so the camera cannot flip through the poles.
@@ -268,18 +292,18 @@ final view the renderer consumes. The renderer never computes follow behavior.
   (time constant ~0.10 s): frame-rate independent, deterministic, bounded,
   overshoot-free, allocation-free. Snaps on first use/reset or when the target
   discontinuity exceeds 25 m, so initialization never flies across the world.
-- Camera-relative movement: WASD derives from the camera's horizontal
-  forward/right basis; pitch is dropped (Y=0) so looking up/down never adds
+- Camera-relative movement: WASD derives from the orbit/control basis (not the
+  lagged rendered view); pitch is dropped (Y=0) so looking up/down never adds
   vertical player movement; diagonals normalize; opposite keys cancel.
 - Facing independence: orbiting while stationary leaves Erika's yaw untouched;
-  after orbiting, WASD uses the new camera direction and Erika turns toward it
-  through the existing Phase 2F yaw smoother (no MMO mouse-lock).
+  after orbiting, WASD uses the new control direction and Erika turns toward it
+  through the existing Phase 2F yaw smoother (no MMO mouse-lock, no auto-recenter).
 - Deferred: no camera collision/occlusion/raycasts; the camera may pass through
   walls, terrain, and props until real environment geometry exists.
 
 ## Deferred work
 
-Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation state machines/blend trees, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. Phase 2F covered short crossfades and turn-rate smoothing; Phase 2G added the third-person follow/orbit camera. The smallest logical next step is a camera collision/obstruction pass once real environment geometry exists (raycast or spherecast against walls/props/terrain), or a small movement-feel pass (acceleration/deceleration and turn-in-place) that still leaves root-motion authority unchanged.
+Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation state machines/blend trees, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. Phase 2F covered short crossfades and turn-rate smoothing; Phase 2G added the third-person follow/orbit camera; Phase 2H made the camera continuously look at Erika and aligned her spawn facing with initial forward movement. The smallest logical next step is a camera collision/obstruction pass once real environment geometry exists (raycast or spherecast against walls/props/terrain), or a small movement-feel pass (acceleration/deceleration and turn-in-place) that still leaves root-motion authority unchanged.
 
 ## Repository hygiene
 

@@ -86,4 +86,28 @@ public sealed class CameraState
         YawRadians = yawRadians;
         PitchRadians = Math.Clamp(pitchRadians, -MaxPitchRadians, MaxPitchRadians);
     }
+
+    /// <summary>
+    /// Point the view along an explicit world direction (Phase 2H look-at
+    /// targeting). Yaw/pitch are recovered from <paramref name="forward"/> using
+    /// the same convention as <see cref="Forward"/> (<c>yaw = atan2(x, -z)</c>,
+    /// <c>pitch = asin(y)</c>) so <see cref="Forward"/> reproduces the direction
+    /// with no roll. A non-finite or near-zero direction is ignored, retaining
+    /// the prior orientation instead of producing NaNs.
+    /// </summary>
+    public void SetLookDirection(Vector3 forward)
+    {
+        var lengthSquared = forward.LengthSquared();
+        if (!float.IsFinite(lengthSquared) || lengthSquared < 1e-12f)
+        {
+            return;
+        }
+
+        var direction = Vector3.Normalize(forward);
+        YawRadians = MathF.Atan2(direction.X, -direction.Z);
+        PitchRadians = Math.Clamp(
+            MathF.Asin(Math.Clamp(direction.Y, -1f, 1f)),
+            -MaxPitchRadians,
+            MaxPitchRadians);
+    }
 }

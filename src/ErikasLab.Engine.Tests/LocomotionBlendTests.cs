@@ -512,20 +512,23 @@ public sealed class LocomotionBlendTests
     public void RootTravelFollowsSmoothedYawNotTargetSnap()
     {
         var session = SessionWithClips();
-        // Facing +Z initially; W intends -Z (a 180 degree turn).
-        session.Update(new FrameTime(0.0, 0.016), Move(forward: true));
+        // Phase 2H spawns Erika facing -Z, aligned with W. Pressing S requests +Z,
+        // a 180 degree turn, so travel must curve through the smoothed yaw rather
+        // than snap onto the target heading.
+        session.Update(new FrameTime(0.0, 0.016), Move(back: true));
         var origin = session.ErikaPosition;
 
-        session.Update(new FrameTime(0.05, 0.05), Move(forward: true));
+        session.Update(new FrameTime(0.05, 0.05), Move(back: true));
         var step = session.ErikaPosition - origin;
         var yaw = session.ErikaYawRadians;
 
-        // Still mid-turn: the target is -Z, but travel must follow the visible yaw.
-        Assert.True(yaw > 0f && yaw < MathF.PI);
-        Assert.True(step.Z > 0f);
-        Assert.True(step.X > 0f);
+        // Still mid-turn: the target is +Z, but travel follows the visible yaw.
+        var remaining = MathF.Abs(YawSmoothing.WrapToPi(0f - yaw));
+        Assert.True(remaining > 0f && remaining < MathF.PI);
         var direction = Vector3.Normalize(new Vector3(step.X, 0f, step.Z));
         Assert.Equal(MathF.Sin(yaw), direction.X, precision: 4);
         Assert.Equal(MathF.Cos(yaw), direction.Z, precision: 4);
+        // Not yet snapped to the +Z target direction.
+        Assert.True(direction.Z < 0.99f);
     }
 }

@@ -6,10 +6,12 @@ using Xunit;
 namespace ErikasLab.Engine.Tests;
 
 /// <summary>
-/// Phase 2G third-person follow/orbit camera. Covers portable orbit math,
+/// Phase 2G/2H third-person follow/orbit camera. Covers portable orbit math,
 /// elapsed-time follow smoothing (including frame-split equivalence and snap
-/// policy), camera-relative WASD, player/camera facing independence, and
-/// root-motion/transition regressions.
+/// policy), orbit/control-basis camera-relative WASD, player/camera facing
+/// independence, and root-motion/transition regressions. Phase 2H look-at
+/// targeting and spawn-facing consistency live in
+/// <see cref="ThirdPersonCameraTargetingTests"/>.
 /// </summary>
 public sealed class ThirdPersonCameraTests
 {
@@ -71,23 +73,14 @@ public sealed class ThirdPersonCameraTests
 
     private static InputState NoInput() => Move();
 
-    /// <summary>Set the orbit and push it into the session camera immediately.</summary>
+    /// <summary>
+    /// Set the orbit and settle the camera at that framing (snap, not a
+    /// cross-world fly-in), matching a programmatic spawn/setup change.
+    /// </summary>
     private static void SetOrbit(GameSession session, float yaw, float pitch)
     {
         session.CameraRig.SetOrbit(yaw, pitch);
-        session.CameraRig.Follow(session.Camera, session.ErikaPosition, default);
-    }
-
-    private static Vector3 HorizontalForward(CameraState camera)
-    {
-        var forward = camera.Forward with { Y = 0f };
-        return Vector3.Normalize(forward);
-    }
-
-    private static Vector3 HorizontalRight(CameraState camera)
-    {
-        var right = camera.Right with { Y = 0f };
-        return Vector3.Normalize(right);
+        session.CameraRig.SnapToTarget(session.Camera, session.ErikaPosition);
     }
 
     private static bool IsFinite(Vector3 value) =>
@@ -342,12 +335,12 @@ public sealed class ThirdPersonCameraTests
     [InlineData(3.1415927f)]
     [InlineData(-1.5707964f)]
     [InlineData(0.7f)]
-    public void ForwardIntentMatchesHorizontalCameraForward(float yaw)
+    public void ForwardIntentMatchesControlForward(float yaw)
     {
         var session = SessionWithClips();
         SetOrbit(session, yaw, 0f);
 
-        var forward = HorizontalForward(session.Camera);
+        var forward = session.CameraRig.ControlForward;
         var intent = session.ComputeMovementIntent(Move(forward: true));
 
         Assert.Equal(forward.X, intent.X, precision: 5);
@@ -361,12 +354,12 @@ public sealed class ThirdPersonCameraTests
     [InlineData(3.1415927f)]
     [InlineData(-1.5707964f)]
     [InlineData(0.7f)]
-    public void BackwardIntentMatchesNegativeCameraForward(float yaw)
+    public void BackwardIntentMatchesNegativeControlForward(float yaw)
     {
         var session = SessionWithClips();
         SetOrbit(session, yaw, 0f);
 
-        var forward = HorizontalForward(session.Camera);
+        var forward = session.CameraRig.ControlForward;
         var intent = session.ComputeMovementIntent(Move(back: true));
 
         Assert.Equal(-forward.X, intent.X, precision: 5);
@@ -379,12 +372,12 @@ public sealed class ThirdPersonCameraTests
     [InlineData(3.1415927f)]
     [InlineData(-1.5707964f)]
     [InlineData(0.7f)]
-    public void StrafeIntentMatchesCameraRightBasis(float yaw)
+    public void StrafeIntentMatchesControlRight(float yaw)
     {
         var session = SessionWithClips();
         SetOrbit(session, yaw, 0f);
 
-        var right = HorizontalRight(session.Camera);
+        var right = session.CameraRig.ControlRight;
         var strafeRight = session.ComputeMovementIntent(Move(right: true));
         var strafeLeft = session.ComputeMovementIntent(Move(left: true));
 
@@ -470,16 +463,18 @@ public sealed class ThirdPersonCameraTests
     }
 
     [Fact]
-    public void ErikaTurnsTowardCameraIntentWithSmoothYaw()
+    public void ErikaTurnsTowardControlIntentWithSmoothYaw()
     {
         var session = SessionWithClips();
         SetOrbit(session, MathF.PI / 2f, 0f);
+        var spawnYaw = session.ErikaYawRadians;
 
         session.Update(new FrameTime(1.0, 0.016), Move(forward: true));
         var yaw = session.ErikaYawRadians;
 
-        Assert.True(yaw > 0f);
-        Assert.True(yaw < MathF.PI / 2f);
+        // Spawn facing -Z (pi); control forward is +X (pi/2). Mid-turn.
+        Assert.True(yaw < spawnYaw);
+        Assert.True(yaw > MathF.PI / 2f);
     }
 
     [Fact]

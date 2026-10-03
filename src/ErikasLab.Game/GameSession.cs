@@ -35,7 +35,12 @@ public sealed class GameSession
         World = TestWorldFactory.Create();
         Camera = new CameraState(new Vector3(0, 3.2f, 9.5f));
         ErikaPosition = ErikaFigure.GroundPosition;
-        ErikaYawRadians = ErikaFigure.FacingYawRadians;
+
+        // Phase 2H: Erika starts facing the exact horizontal direction initial
+        // W will request (the camera's orbit/control forward), so the game does
+        // not open on the front of a model that immediately turns 180 degrees.
+        // This is derived from the camera convention, not a hard-coded offset.
+        ErikaYawRadians = _thirdPersonCamera.InitialFacingYawRadians;
 
         // Phase 2G: establish a settled third-person frame at spawn (snap, not
         // a cross-world fly-in). No collision yet; the camera may pass through
@@ -82,10 +87,12 @@ public sealed class GameSession
     public Vector3 ErikaPosition { get; private set; } = ErikaFigure.GroundPosition;
 
     /// <summary>
-    /// Yaw (radians, Y-up) Erika faces. Phase 2F smoothly turns toward movement
-    /// heading at <see cref="TurnSpeedRadiansPerSecond"/>; stationary retains it.
+    /// Yaw (radians, Y-up) Erika faces. Phase 2H spawns it aligned with the
+    /// initial camera-control forward; Phase 2F then smoothly turns toward the
+    /// movement heading at <see cref="TurnSpeedRadiansPerSecond"/>; stationary
+    /// retains it.
     /// </summary>
-    public float ErikaYawRadians { get; private set; } = ErikaFigure.FacingYawRadians;
+    public float ErikaYawRadians { get; private set; }
 
     /// <summary>
     /// Provide portable animation data so locomotion can consume authored root
@@ -108,38 +115,19 @@ public sealed class GameSession
     }
 
     /// <summary>
-    /// Camera-relative movement intent from WASD: the camera's horizontal
-    /// forward / right basis (Phase 2G third-person orbit; Y dropped so pitch
-    /// never adds vertical travel), normalized so diagonals are unit length
-    /// (W+D is not faster than W). Returns zero when there is no movement input
-    /// (including opposite keys canceling, e.g. W+S).
+    /// Camera-relative movement intent from WASD, using the rig's horizontal
+    /// orbit/control basis (Phase 2H; Y=0 so pitch never adds vertical travel).
+    /// This basis is derived from orbit yaw only and is independent of the
+    /// rendered look direction and of positional follow lag, so the smoothed
+    /// camera position can never bend player intent. Diagonals normalize; returns
+    /// zero when there is no movement input (including opposite keys canceling).
     /// World mapping at default camera yaw (forward -Z, right +X):
     /// W=(0,0,-1), S=(0,0,+1), A=(-1,0,0), D=(+1,0,0), diagonals normalized.
     /// </summary>
     public Vector3 ComputeMovementIntent(InputState input)
     {
-        var forward = Camera.Forward;
-        forward.Y = 0;
-        var right = Camera.Right;
-        right.Y = 0;
-
-        if (forward.LengthSquared() < 1e-8f)
-        {
-            forward = new Vector3(0, 0, -1);
-        }
-        else
-        {
-            forward = Vector3.Normalize(forward);
-        }
-
-        if (right.LengthSquared() < 1e-8f)
-        {
-            right = new Vector3(1, 0, 0);
-        }
-        else
-        {
-            right = Vector3.Normalize(right);
-        }
+        var forward = _thirdPersonCamera.ControlForward;
+        var right = _thirdPersonCamera.ControlRight;
 
         var forwardAmount = (input.MoveForward ? 1 : 0) - (input.MoveBackward ? 1 : 0);
         var rightAmount = (input.StrafeRight ? 1 : 0) - (input.StrafeLeft ? 1 : 0);
@@ -156,11 +144,12 @@ public sealed class GameSession
     {
         ExitRequested |= input.ExitRequested;
 
-        // Phase 2G: orbit from look input (mouse/arrows) and follow Erika's
-        // authoritative world position. Orientation is written before intent so
-        // this frame's WASD uses the current camera basis; position follows with
-        // a small smoothed lag. WASD still drives Erika, never the camera.
-        _thirdPersonCamera.Update(Camera, ErikaPosition, input, frameTime);
+        // Phase 2G/2H: apply look input to the orbit first so this frame's WASD
+        // uses the fresh orbit/control basis. The camera is followed *after*
+        // root motion below, so its rendered look-at targets Erika's current
+        // world position rather than last frame's. WASD still drives Erika,
+        // never the camera.
+        _thirdPersonCamera.UpdateOrbit(input, frameTime);
 
         var intent = ComputeMovementIntent(input);
         var hasMovement = intent.LengthSquared() > 1e-8f;
@@ -271,6 +260,11 @@ public sealed class GameSession
                 }
             }
         }
+
+        // Phase 2H: follow with the current (post-movement) Erika position so the
+        // rendered camera looks exactly at her now; only the camera position
+        // trails, never its orientation.
+        _thirdPersonCamera.Follow(Camera, ErikaPosition, frameTime);
 
         _previousClipElapsed = currentElapsed;
         SyncErikaInstance();

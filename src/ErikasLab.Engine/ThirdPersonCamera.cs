@@ -3,11 +3,22 @@ using System.Numerics;
 namespace ErikasLab.Engine;
 
 /// <summary>
-/// Phase 2G third-person follow/orbit camera. Portable: it owns only orbit
+/// Phase 2G/2H third-person follow/orbit camera. Portable: it owns only orbit
 /// angles, follow distance, look-at height, and the smoothed camera position,
 /// and writes the final view state into <see cref="CameraState"/>. It observes
 /// the target's authoritative world position; it never owns or mutates
 /// gameplay movement or facing (that stays in <c>GameSession</c>).
+///
+/// Two distinct bases (Phase 2H):
+/// <list type="bullet">
+/// <item><b>Orbit/control basis</b> (<see cref="ControlForward"/> /
+/// <see cref="ControlRight"/>): horizontal, derived from orbit yaw only. This is
+/// what WASD means; positional follow lag never bends it.</item>
+/// <item><b>Rendered view basis</b> (<c>camera.Forward</c>): the camera looks
+/// from its current smoothed position toward the target, i.e.
+/// <c>normalize(target - camera.Position)</c>, so Erika stays centred while the
+/// position trails.</item>
+/// </list>
 ///
 /// Model (all System.Numerics):
 /// <code>
@@ -15,15 +26,11 @@ namespace ErikasLab.Engine;
 ///   orbitForward  = ForwardFromOrbit(OrbitYawRadians, OrbitPitchRadians)
 ///   desiredPos    = target - orbitForward * Distance
 ///   camera.Position = smoothed(desiredPos)
-///   camera.Forward  = orbitForward
+///   camera.Forward  = normalize(target - camera.Position)   // rendered look-at
 /// </code>
-/// The orientation is the player-controlled orbit basis (not an auto look-at),
-/// so WASD stays camera-relative and does not rotate while the position
-/// catches up. At rest <c>camera.Forward</c> equals
-/// <c>normalize(target - camera.Position)</c>; during lateral follow lag the
-/// two differ by a few degrees until the camera settles.
-///
-/// Follow smoothing is exponential and elapsed-time based
+/// When the camera position and target coincide (degenerate), the view falls
+/// back to <c>orbitForward</c> so no zero vector is normalized and no NaN
+/// escapes. Follow smoothing is exponential and elapsed-time based
 /// (<c>alpha = 1 - exp(-rate * dt)</c>): frame-rate independent, deterministic,
 /// bounded, overshoot-free, and allocation-free. Very large or clearly
 /// discontinuous target changes snap instead of flying across the world.
@@ -56,6 +63,13 @@ public sealed class ThirdPersonCamera
     /// the camera instead of smoothing across the world.
     /// </summary>
     public const float DefaultSnapDistanceMeters = 25f;
+
+    /// <summary>
+    /// Below this camera-to-target distance (meters) the look direction is
+    /// treated as degenerate and the view falls back to the orbit forward basis
+    /// (avoids normalizing a zero vector / emitting NaNs).
+    /// </summary>
+    public const float MinLookDistanceMeters = 1e-4f;
 
     /// <summary>Preserved Phase 1 mouse-look sensitivity (radians per pixel).</summary>
     public const float DefaultMouseLookSensitivity = 0.0025f;
@@ -111,6 +125,35 @@ public sealed class ThirdPersonCamera
 
     /// <summary>True once a follow/snap has established a finite position.</summary>
     public bool IsInitialized { get; private set; }
+
+    /// <summary>
+    /// Horizontal orbit/control forward (unit length, Y=0). Yaw 0 is -Z. This is
+    /// the movement-intent basis; it depends only on <see cref="OrbitYawRadians"/>
+    /// and is independent of positional follow lag and of the rendered view.
+    /// </summary>
+    public Vector3 ControlForward =>
+        new(MathF.Sin(OrbitYawRadians), 0f, -MathF.Cos(OrbitYawRadians));
+
+    /// <summary>
+    /// Horizontal orbit/control right (unit length, Y=0), orthogonal to
+    /// <see cref="ControlForward"/> (yaw 0 is +X). Movement-intent basis only.
+    /// </summary>
+    public Vector3 ControlRight =>
+        new(MathF.Cos(OrbitYawRadians), 0f, MathF.Sin(OrbitYawRadians));
+
+    /// <summary>
+    /// Yaw (radians) Erika should face to agree with the initial horizontal
+    /// control forward. Uses the established locomotion convention
+    /// <c>yaw = atan2(direction.X, direction.Z)</c>.
+    /// </summary>
+    public float InitialFacingYawRadians
+    {
+        get
+        {
+            var forward = ControlForward;
+            return MathF.Atan2(forward.X, forward.Z);
+        }
+    }
 
     /// <summary>
     /// Orbit forward basis (unit length), matching <see cref="CameraState.Forward"/>.
@@ -171,6 +214,11 @@ public sealed class ThirdPersonCamera
     /// and write position + orientation into <paramref name="camera"/>. Snaps on
     /// first use, on non-finite state, or when the discontinuity threshold is
     /// exceeded; zero elapsed time produces no movement.
+    ///
+    /// The written orientation is the rendered look-at direction
+    /// (<c>normalize(target - camera.Position)</c>) so the target stays centred
+    /// even while the position lags; the movement/control basis is unaffected
+    /// (use <see cref="ControlForward"/>/<see cref="ControlRight"/>).
     /// </summary>
     public void Follow(CameraState camera, Vector3 targetWorldPosition, FrameTime frameTime)
     {
@@ -191,7 +239,26 @@ public sealed class ThirdPersonCamera
         }
 
         camera.Position = Position;
-        camera.SetLook(OrbitYawRadians, OrbitPitchRadians);
+        ApplyView(camera, targetWorldPosition);
+    }
+
+    /// <summary>
+    /// Point <paramref name="camera"/> from its current position toward the
+    /// configured target point. Falls back to the orbit forward basis when the
+    /// camera-to-target vector is degenerate or non-finite so all camera vectors
+    /// stay finite and roll-free.
+    /// </summary>
+    private void ApplyView(CameraState camera, Vector3 targetWorldPosition)
+    {
+        var toTarget = TargetPoint(targetWorldPosition) - Position;
+        if (IsFinite(toTarget) && toTarget.LengthSquared() > MinLookDistanceMeters * MinLookDistanceMeters)
+        {
+            camera.SetLookDirection(toTarget);
+        }
+        else
+        {
+            camera.SetLook(OrbitYawRadians, OrbitPitchRadians);
+        }
     }
 
     /// <summary>Force the next <see cref="Follow"/> to snap (session reset/teleport).</summary>
