@@ -20,9 +20,36 @@ public sealed class GameSession
     /// <summary>
     /// Phase 2F centralized yaw turn speed: 4π rad/s (~720°/s). A 180° reversal
     /// takes 0.25 s and a 90° turn 0.125 s, roughly matching the crossfade
-    /// window. Constant angular speed, shortest path, no overshoot.
+    /// window. Constant angular speed, shortest path, no overshoot. Phase 2J
+    /// reuses this rate for stationary turn-in-place.
     /// </summary>
     public const float TurnSpeedRadiansPerSecond = MathF.PI * 4f;
+
+    /// <summary>
+    /// Phase 2J centralized stationary-turn speed threshold (m/s). At or below
+    /// this speed Erika counts as stationary for turn-in-place entry. Slightly
+    /// above the Phase 2I zero-speed clamp (0.01 m/s) so a barely-creeping
+    /// character can still turn, yet far below any readable walk pace
+    /// (walk ≈ 1.69 m/s), so coasting/decelerating motion always wins.
+    /// </summary>
+    public const float StationaryTurnSpeedThresholdMetersPerSecond = 0.1f;
+
+    /// <summary>
+    /// Phase 2J centralized turn-in-place entry angle (radians): 45°. A
+    /// stationary requested heading at least this far from the current yaw
+    /// enters a stationary turn-in-place. Smaller corrections keep the ordinary
+    /// Phase 2F yaw smoothing while travel begins. Inclusive boundary.
+    /// </summary>
+    public const float TurnInPlaceEnterAngleRadians = MathF.PI / 4f;
+
+    /// <summary>
+    /// Phase 2J centralized turn-in-place release angle (radians): 15°. Once
+    /// the heading error falls to or below this smaller angle, the turn state
+    /// ends and the normal Phase 2I acceleration envelope begins toward the
+    /// authored walk/run speed. The gap to the enter angle is hysteresis, so
+    /// input hovering near the boundary cannot flicker the state.
+    /// </summary>
+    public const float TurnInPlaceReleaseAngleRadians = MathF.PI / 12f;
 
     private readonly MovementSpeedEnvelope _moveSpeed = new();
     private AnimationClip? _walkClip;
@@ -34,6 +61,9 @@ public sealed class GameSession
     private float _runAuthoredSpeed;
     private float _targetMoveSpeed;
     private float _rootMotionGain;
+    private bool _turnInPlaceActive;
+    private bool _hasRequestedHeading;
+    private float _requestedHeadingRadians;
 
     public GameSession()
     {
@@ -132,6 +162,41 @@ public sealed class GameSession
     public float RunAuthoredSpeedMetersPerSecond => _runAuthoredSpeed;
 
     /// <summary>
+    /// Phase 2J true while a stationary turn-in-place is active. While active,
+    /// the turn gates translation: idle stays the visual clip and the target
+    /// movement speed stays zero until the heading error reaches
+    /// <see cref="TurnInPlaceReleaseAngleRadians"/>.
+    /// </summary>
+    public bool IsTurningInPlace => _turnInPlaceActive;
+
+    /// <summary>
+    /// Phase 2J true while the stationary turn gates translational
+    /// acceleration (identical to <see cref="IsTurningInPlace"/>; the gate is
+    /// active exactly while the turn state is active).
+    /// </summary>
+    public bool TurnGatingActive => _turnInPlaceActive;
+
+    /// <summary>
+    /// Phase 2J true while directional movement intent requests a heading.
+    /// </summary>
+    public bool HasRequestedHeading => _hasRequestedHeading;
+
+    /// <summary>
+    /// Phase 2J current requested movement heading (radians, camera-relative).
+    /// Only meaningful while <see cref="HasRequestedHeading"/> is true.
+    /// </summary>
+    public float RequestedHeadingRadians => _requestedHeadingRadians;
+
+    /// <summary>
+    /// Phase 2J absolute wrapped heading error (radians) between the current
+    /// yaw and the requested heading; 0 when no heading is requested.
+    /// </summary>
+    public float HeadingErrorRadians =>
+        _hasRequestedHeading
+            ? MathF.Abs(YawSmoothing.WrapToPi(_requestedHeadingRadians - ErikaYawRadians))
+            : 0f;
+
+    /// <summary>
     /// Provide portable animation data so locomotion can consume authored root
     /// motion. Without this (e.g. Phase 2D diagnostic tests) Update performs
     /// clip selection only and Erika stays in place. The platform host calls
@@ -202,6 +267,14 @@ public sealed class GameSession
         var intent = ComputeMovementIntent(input);
         var hasMovement = intent.LengthSquared() > 1e-8f;
 
+        // Phase 2J: resolve the stationary turn-in-place state from this frame's
+        // requested heading *before* clip selection, so the gate can hold idle
+        // and zero the translational target while a large heading error is
+        // resolved. Runs before yaw smoothing so the entry decision uses the
+        // start-of-frame yaw (frame-rate independent at the exact threshold).
+        var requestedHeading = hasMovement ? MathF.Atan2(intent.X, intent.Z) : 0f;
+        UpdateTurnInPlace(hasMovement, requestedHeading);
+
         string? diagnostic = null;
         if (input.SelectIdle)
         {
@@ -226,7 +299,17 @@ public sealed class GameSession
         string requested;
         bool requestedViaDiagnostic;
         float targetSpeed;
-        if (hasMovement)
+        if (_turnInPlaceActive)
+        {
+            // Phase 2J translational gate: while the stationary turn is active,
+            // idle stays the visual clip (no walk/run root authority, so no world
+            // translation is consumed) and the target speed stays zero. The
+            // normal Phase 2I acceleration envelope begins on the release frame.
+            requested = ErikaFigure.IdleClipName;
+            requestedViaDiagnostic = false;
+            targetSpeed = 0f;
+        }
+        else if (hasMovement)
         {
             requested = input.Sprint ? ErikaFigure.RunClipName : ErikaFigure.WalkClipName;
             requestedViaDiagnostic = false;
@@ -370,6 +453,58 @@ public sealed class GameSession
 
         _previousClipElapsed = currentElapsed;
         SyncErikaInstance();
+    }
+
+    /// <summary>
+    /// Phase 2J stationary turn-in-place state resolution, run once per frame
+    /// before clip selection and yaw smoothing.
+    ///
+    /// Entry requires all of: directional intent, an effectively stationary
+    /// Phase 2I movement speed (coasting/decelerating motion never enters), and
+    /// a wrapped heading error of at least
+    /// <see cref="TurnInPlaceEnterAngleRadians"/>. Once active, the newest
+    /// requested heading is tracked every frame (shortest-path yaw integration
+    /// is handled by the existing Phase 2F smoother; no turns are queued) and
+    /// the state releases when the error falls to
+    /// <see cref="TurnInPlaceReleaseAngleRadians"/> or below, after which the
+    /// normal acceleration envelope takes over. Losing directional intent
+    /// cancels the turn immediately and retains the current facing.
+    /// </summary>
+    private void UpdateTurnInPlace(bool hasRequestedHeading, float requestedHeading)
+    {
+        if (!hasRequestedHeading || !float.IsFinite(requestedHeading))
+        {
+            _hasRequestedHeading = false;
+            _turnInPlaceActive = false;
+            return;
+        }
+
+        _hasRequestedHeading = true;
+        _requestedHeadingRadians = requestedHeading;
+
+        var stationary =
+            _moveSpeed.CurrentMetersPerSecond <= StationaryTurnSpeedThresholdMetersPerSecond;
+        if (!stationary)
+        {
+            // Phase 2I: residual/coasting motion means Erika is still moving;
+            // the existing coast-facing policy applies and a stationary turn
+            // must not start (or resume) until the speed reaches the threshold.
+            _turnInPlaceActive = false;
+            return;
+        }
+
+        var error = MathF.Abs(YawSmoothing.WrapToPi(requestedHeading - ErikaYawRadians));
+        if (!_turnInPlaceActive)
+        {
+            if (error >= TurnInPlaceEnterAngleRadians)
+            {
+                _turnInPlaceActive = true;
+            }
+        }
+        else if (error <= TurnInPlaceReleaseAngleRadians)
+        {
+            _turnInPlaceActive = false;
+        }
     }
 
     /// <summary>

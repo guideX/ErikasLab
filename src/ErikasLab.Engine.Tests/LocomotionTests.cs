@@ -134,11 +134,34 @@ public sealed class LocomotionTests
         bool forward, bool back, bool left, bool right)
     {
         var session = SessionWithClips();
-        session.Update(new FrameTime(1.0, 0.016), Move(forward, back, left, right));
-        Assert.Equal(ErikaFigure.WalkClipName, session.ActiveClipName);
+        var input = Move(forward, back, left, right);
+
+        // Compute the entry-decision heading error exactly as the session does
+        // (pre-smoothing intent vs. spawn yaw), so the assertion matches the
+        // turn-in-place entry branch bit-for-bit.
+        var intent = session.ComputeMovementIntent(input);
+        var entryError = MathF.Abs(YawSmoothing.WrapToPi(
+            MathF.Atan2(intent.X, intent.Z) - session.ErikaYawRadians));
+
+        session.Update(new FrameTime(1.0, 0.016), input);
         Assert.True(float.IsFinite(session.ErikaYawRadians));
         var rotation = Quaternion.CreateFromYawPitchRoll(session.ErikaYawRadians, 0f, 0f);
         Assert.Equal(1f, rotation.Length(), precision: 5);
+
+        // Phase 2J: a large stationary heading error enters turn-in-place (idle
+        // held, zero target); a small error starts ordinary walk immediately.
+        if (entryError >= GameSession.TurnInPlaceEnterAngleRadians)
+        {
+            Assert.True(session.IsTurningInPlace);
+            Assert.Equal(ErikaFigure.IdleClipName, session.ActiveClipName);
+            Assert.Equal(0f, session.TargetMoveSpeedMetersPerSecond);
+        }
+        else
+        {
+            Assert.False(session.IsTurningInPlace);
+            Assert.Equal(ErikaFigure.WalkClipName, session.ActiveClipName);
+            Assert.Equal(session.WalkAuthoredSpeedMetersPerSecond, session.TargetMoveSpeedMetersPerSecond, precision: 4);
+        }
     }
 
     [Fact]

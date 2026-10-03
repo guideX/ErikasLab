@@ -539,22 +539,44 @@ public sealed class LocomotionBlendTests
     {
         var session = SessionWithClips();
         // Phase 2H spawns Erika facing -Z, aligned with W. Pressing S requests +Z,
-        // a 180 degree turn, so travel must curve through the smoothed yaw rather
-        // than snap onto the target heading.
+        // a 180 degree stationary turn-in-place: gated with no travel while the
+        // yaw rotates, then ordinary walk travel that follows the smoothed yaw.
         session.Update(new FrameTime(0.0, 0.016), Move(back: true));
+        Assert.True(session.IsTurningInPlace);
         var origin = session.ErikaPosition;
 
+        // Mid-turn: still gated, no world translation.
         session.Update(new FrameTime(0.05, 0.05), Move(back: true));
-        var step = session.ErikaPosition - origin;
-        var yaw = session.ErikaYawRadians;
+        Assert.True(session.IsTurningInPlace);
+        Assert.Equal(origin.X, session.ErikaPosition.X, precision: 6);
+        Assert.Equal(origin.Z, session.ErikaPosition.Z, precision: 6);
 
-        // Still mid-turn: the target is +Z, but travel follows the visible yaw.
-        var remaining = MathF.Abs(YawSmoothing.WrapToPi(0f - yaw));
-        Assert.True(remaining > 0f && remaining < MathF.PI);
-        var direction = Vector3.Normalize(new Vector3(step.X, 0f, step.Z));
-        Assert.Equal(MathF.Sin(yaw), direction.X, precision: 4);
-        Assert.Equal(MathF.Cos(yaw), direction.Z, precision: 4);
-        // Not yet snapped to the +Z target direction.
-        Assert.True(direction.Z < 0.99f);
+        // Run out the turn and the start of the walk.
+        var time = 0.1;
+        var guard = 0;
+        while (session.IsTurningInPlace && guard++ < 1000)
+        {
+            session.Update(new FrameTime(time, 0.016), Move(back: true));
+            time += 0.016;
+        }
+
+        Assert.False(session.IsTurningInPlace);
+
+        // Post-release travel follows the current smoothed yaw, step by step.
+        var previous = session.ErikaPosition;
+        for (var i = 0; i < 10; i++)
+        {
+            session.Update(new FrameTime(time, 0.016), Move(back: true));
+            time += 0.016;
+            var step = session.ErikaPosition - previous;
+            if (step.LengthSquared() > 1e-12f)
+            {
+                var direction = Vector3.Normalize(new Vector3(step.X, 0f, step.Z));
+                Assert.Equal(MathF.Sin(session.ErikaYawRadians), direction.X, precision: 3);
+                Assert.Equal(MathF.Cos(session.ErikaYawRadians), direction.Z, precision: 3);
+            }
+
+            previous = session.ErikaPosition;
+        }
     }
 }
