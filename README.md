@@ -186,6 +186,31 @@ unchanged: world position, yaw, and speed are bit-identical with synchronization
 on or off (verified at 30/60/144 Hz). Residual foot sliding remains only in the
 capped run→walk window; stride warping and foot IK are still deferred.
 
+Phase 2L adds: the first actual Fimbul Winter environment — a Viking-style
+longhouse standing in a dark forest clearing, built as a **blockout** (simple
+geometry, placeholder vertex-color materials, no final art). A portable
+`LonghouseLayout` (Engine) centralizes every dimension, derived measurement,
+deterministic post/tree placement rule, and the spawn; `EnvironmentFactory`
+(Game) turns it into static `SceneObject` geometry that reuses the existing
+scene/mesh path (`Scene` + `MeshFactory` + one shared unit primitive per palette
+entry). The longhouse is 16 m long x 6 m wide, walls 2.6 m to a 5.0 m ridge,
+with a 1.2 m x 2.0 m **open** doorway in the +Z gable end (two flanking wall
+segments plus a lintel, no fake door texture), two steep overhanging roof slabs
+with a ridge beam and filled triangular gable ends, corner/repeated side posts,
+tie beams, rafters, a central stone hearth, long benches, and two tables. It
+sits on a 36 m clearing over a 140 m dark forest floor, ringed by 24
+deterministically jittered blockout conifers (trunk + three canopy tiers). Erika
+spawns outside the front entrance at `(0, 0, 12)` facing -Z (straight at the
+door, consistent with the Phase 2H derived spawn facing), so both the exterior
+and the interior are immediately visible. There is intentionally **no player
+collision and no camera collision** yet, and the ground stays flat; the camera
+may clip through walls/roof inside, which is expected and motivates a later
+camera-collision phase. All Phase 2E–2K locomotion, camera, crossfade,
+turn-in-place, and spawn-facing behavior is unchanged. New `MeshFactory`
+helpers are limited to `CreateGroundRectangle` and `CreateTriangularPrism`, and
+new `ColorRgba` entries are the blockout palette; no new gameplay or animation
+behavior was required.
+
 Meshes are generated in code for the proof scene, and canonical Erika arrives through the content pipeline described below, so no manual asset authoring is required yet.
 
 ## Erika content (Phase 2B)
@@ -367,7 +392,7 @@ final view the renderer consumes. The renderer never computes follow behavior.
 
 ## Deferred work
 
-Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation state machines/blend trees, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. Phase 2F covered short crossfades and turn-rate smoothing; Phase 2G added the third-person follow/orbit camera; Phase 2H made the camera continuously look at Erika and aligned her spawn facing with initial forward movement; Phase 2I added acceleration/deceleration movement response (speed envelope scaling the single authored root-motion authority); Phase 2J added stationary turn-in-place (a gated 45°-enter/15°-release procedural pivot that holds idle and zero translational target until the heading error is resolved, then releases through the existing speed envelope); Phase 2K synchronized the visible locomotion playback rate with the Phase 2I speed envelope through a separate pose clock, bounding the run→walk raw rate at 2×. The smallest logical next step is stride warping or foot IK to remove the remaining capped run→walk slide, authored turn-in-place clips to replace the procedural visual fallback, or a camera collision/obstruction pass once real environment geometry exists.
+Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation state machines/blend trees, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. Phase 2F covered short crossfades and turn-rate smoothing; Phase 2G added the third-person follow/orbit camera; Phase 2H made the camera continuously look at Erika and aligned her spawn facing with initial forward movement; Phase 2I added acceleration/deceleration movement response (speed envelope scaling the single authored root-motion authority); Phase 2J added stationary turn-in-place (a gated 45°-enter/15°-release procedural pivot that holds idle and zero translational target until the heading error is resolved, then releases through the existing speed envelope); Phase 2K synchronized the visible locomotion playback rate with the Phase 2I speed envelope through a separate pose clock, bounding the run→walk raw rate at 2×. Phase 2L added the first environment blockout (Viking longhouse in a forest clearing) as static vertex-colored geometry owned by a centralized portable layout. With real environment geometry now present, the smallest logical next step is a camera collision/obstruction pass (the 4.5 m third-person camera clips through the longhouse walls/roof), followed by player collision against the longhouse shell; stride warping/foot IK to remove the remaining capped run→walk slide and authored turn-in-place clips remain valid later steps. Final textures/models are intentionally deferred.
 
 ## Repository hygiene
 

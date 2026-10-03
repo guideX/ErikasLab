@@ -86,7 +86,12 @@ public sealed class GameSession
 
     public GameSession()
     {
-        World = TestWorldFactory.Create();
+        World = EnvironmentFactory.Create();
+
+        // GameSession owns Erika: the environment builds static geometry only and
+        // this instance's transform is synced from her authoritative state.
+        World.AddModel(ErikaFigure.CreateInstance());
+
         Camera = new CameraState(new Vector3(0, 3.2f, 9.5f));
         ErikaPosition = ErikaFigure.GroundPosition;
 

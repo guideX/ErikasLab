@@ -28,14 +28,14 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
 
         Content.RootDirectory = "Content";
         IsMouseVisible = false;
-        Window.Title = "Erika's Lab - Phase 2K";
+        Window.Title = "Erika's Lab - Phase 2L";
         Window.AllowUserResizing = true;
         Window.ClientSizeChanged += OnClientSizeChanged;
     }
 
     protected override void Initialize()
     {
-        Console.WriteLine("Erika's Lab | Phase 2K | initializing");
+        Console.WriteLine("Erika's Lab | Phase 2L | initializing");
         Console.WriteLine($"Runtime: {RuntimeInformation.FrameworkDescription} ({RuntimeInformation.ProcessArchitecture})");
         base.Initialize();
     }
@@ -68,6 +68,12 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
         Console.WriteLine($"Renderer backend: {rendererInfo.BackendName}");
         Console.WriteLine("Engine initialization: successful");
         Console.WriteLine($"Scene creation: successful ({_gameSession.World.Objects.Count} objects, {_gameSession.World.Models.Count} models)");
+        Console.WriteLine(
+            "Environment blockout: longhouse " +
+            $"{LonghouseLayout.Length:F0} m x {LonghouseLayout.Width:F0} m, walls {LonghouseLayout.WallHeight:F1} m, " +
+            $"ridge {LonghouseLayout.RidgeHeight:F1} m, door {LonghouseLayout.DoorWidth:F1} x {LonghouseLayout.DoorHeight:F1} m, " +
+            $"clearing {LonghouseLayout.ClearingSize:F0} m, tree ring r={LonghouseLayout.TreeRingRadius:F0} m " +
+            $"({LonghouseLayout.TreeCount} trees); spawn {LonghouseLayout.SpawnPosition} facing -Z; no player/camera collision");
 
         try
         {

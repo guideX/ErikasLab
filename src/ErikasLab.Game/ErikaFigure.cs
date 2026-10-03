@@ -39,10 +39,11 @@ public static class ErikaFigure
     public static float GroundLift => ModelPlacement.LiftToGround(NativeGroundUnits, Scale);
 
     /// <summary>
-    /// Where Erika stands: front-center of the Phase 1 test scene, fully in
-    /// the default camera frustum (camera at z=9.5 looking -Z).
+    /// Where Erika stands at spawn (Phase 2L): on the clearing just outside the
+    /// longhouse's front doorway, facing -Z at the entrance. Owned by the
+    /// environment layout so the character and the world agree on the spawn.
     /// </summary>
-    public static readonly Vector3 GroundPosition = new(0, 0, -1.0f);
+    public static readonly Vector3 GroundPosition = LonghouseLayout.SpawnPosition;
 
     /// <summary>
     /// Yaw applied to the imported model so she faces world +Z (toward the

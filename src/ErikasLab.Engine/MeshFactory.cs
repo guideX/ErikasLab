@@ -11,13 +11,35 @@ public static class MeshFactory
             throw new ArgumentOutOfRangeException(nameof(size), "The ground plane size must be positive.");
         }
 
-        var halfSize = size / 2;
+        return CreateGroundRectangle(size, size, color);
+    }
+
+    /// <summary>
+    /// Phase 2L rectangular ground/floor plane in the XZ plane, normal +Y,
+    /// centered on the local origin. Reuses the proven ground-plane winding so
+    /// the longhouse floor and clearing render with the same front-face
+    /// convention as the Phase 1 ground.
+    /// </summary>
+    public static MeshData CreateGroundRectangle(float width, float depth, ColorRgba color)
+    {
+        if (width <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(width), "The ground width must be positive.");
+        }
+
+        if (depth <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(depth), "The ground depth must be positive.");
+        }
+
+        var halfWidth = width / 2;
+        var halfDepth = depth / 2;
         var vertices = new[]
         {
-            new MeshVertex(new Vector3(-halfSize, 0, -halfSize), Vector3.UnitY, color),
-            new MeshVertex(new Vector3(-halfSize, 0, halfSize), Vector3.UnitY, color),
-            new MeshVertex(new Vector3(halfSize, 0, halfSize), Vector3.UnitY, color),
-            new MeshVertex(new Vector3(halfSize, 0, -halfSize), Vector3.UnitY, color),
+            new MeshVertex(new Vector3(-halfWidth, 0, -halfDepth), Vector3.UnitY, color),
+            new MeshVertex(new Vector3(-halfWidth, 0, halfDepth), Vector3.UnitY, color),
+            new MeshVertex(new Vector3(halfWidth, 0, halfDepth), Vector3.UnitY, color),
+            new MeshVertex(new Vector3(halfWidth, 0, -halfDepth), Vector3.UnitY, color),
         };
 
         // Winding is clockwise-on-screen (MonoGame DirectX front-face convention
@@ -55,6 +77,63 @@ public static class MeshFactory
             indices[indexOffset + 4] = vertexOffset + 2;
             indices[indexOffset + 5] = vertexOffset + 3;
         }
+
+        return new MeshData(vertices, indices);
+    }
+
+    /// <summary>
+    /// Phase 2L gable/roof triangular prism. The triangular cross-section lies
+    /// in the local XY plane (base width along X at y=0, apex at
+    /// <c>(0, size.Y)</c>) and is extruded along Z by <c>size.Z</c>, centered on
+    /// the local origin. Face winding matches the box convention (right-hand
+    /// outward normal) so the gable ends render with the same front-face rule.
+    /// </summary>
+    public static MeshData CreateTriangularPrism(Vector3 size, ColorRgba color)
+    {
+        if (size.X <= 0 || size.Y <= 0 || size.Z <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(size), "Prism dimensions must be positive.");
+        }
+
+        var halfWidth = size.X / 2;
+        var halfDepth = size.Z / 2;
+        var height = size.Y;
+
+        var vertices = new List<MeshVertex>(18)
+        {
+            // Front cap (+Z)
+            new(new Vector3(-halfWidth, 0, halfDepth), Vector3.UnitZ, color),
+            new(new Vector3(halfWidth, 0, halfDepth), Vector3.UnitZ, color),
+            new(new Vector3(0, height, halfDepth), Vector3.UnitZ, color),
+            // Back cap (-Z)
+            new(new Vector3(halfWidth, 0, -halfDepth), -Vector3.UnitZ, color),
+            new(new Vector3(-halfWidth, 0, -halfDepth), -Vector3.UnitZ, color),
+            new(new Vector3(0, height, -halfDepth), -Vector3.UnitZ, color),
+            // Bottom (-Y)
+            new(new Vector3(-halfWidth, 0, -halfDepth), -Vector3.UnitY, color),
+            new(new Vector3(halfWidth, 0, -halfDepth), -Vector3.UnitY, color),
+            new(new Vector3(halfWidth, 0, halfDepth), -Vector3.UnitY, color),
+            new(new Vector3(-halfWidth, 0, halfDepth), -Vector3.UnitY, color),
+            // Left slope (outward -X/+Y)
+            new(new Vector3(-halfWidth, 0, halfDepth), Vector3.Normalize(new Vector3(-height, halfWidth, 0)), color),
+            new(new Vector3(0, height, halfDepth), Vector3.Normalize(new Vector3(-height, halfWidth, 0)), color),
+            new(new Vector3(0, height, -halfDepth), Vector3.Normalize(new Vector3(-height, halfWidth, 0)), color),
+            new(new Vector3(-halfWidth, 0, -halfDepth), Vector3.Normalize(new Vector3(-height, halfWidth, 0)), color),
+            // Right slope (outward +X/+Y)
+            new(new Vector3(halfWidth, 0, halfDepth), Vector3.Normalize(new Vector3(height, halfWidth, 0)), color),
+            new(new Vector3(halfWidth, 0, -halfDepth), Vector3.Normalize(new Vector3(height, halfWidth, 0)), color),
+            new(new Vector3(0, height, -halfDepth), Vector3.Normalize(new Vector3(height, halfWidth, 0)), color),
+            new(new Vector3(0, height, halfDepth), Vector3.Normalize(new Vector3(height, halfWidth, 0)), color),
+        };
+
+        var indices = new[]
+        {
+            0, 1, 2,             // front
+            3, 4, 5,             // back
+            6, 7, 8, 6, 8, 9,    // bottom
+            10, 11, 12, 10, 12, 13, // left slope
+            14, 15, 16, 14, 16, 17, // right slope
+        };
 
         return new MeshData(vertices, indices);
     }
