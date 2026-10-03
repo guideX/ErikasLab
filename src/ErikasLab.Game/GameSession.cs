@@ -24,11 +24,16 @@ public sealed class GameSession
     /// </summary>
     public const float TurnSpeedRadiansPerSecond = MathF.PI * 4f;
 
+    private readonly MovementSpeedEnvelope _moveSpeed = new();
     private AnimationClip? _walkClip;
     private AnimationClip? _runClip;
     private int _hipsBoneIndex = -1;
     private double _previousClipElapsed;
     private bool _diagnosticLatch;
+    private float _walkAuthoredSpeed;
+    private float _runAuthoredSpeed;
+    private float _targetMoveSpeed;
+    private float _rootMotionGain;
 
     public GameSession()
     {
@@ -95,6 +100,38 @@ public sealed class GameSession
     public float ErikaYawRadians { get; private set; }
 
     /// <summary>
+    /// Phase 2I current filtered movement speed (m/s), finite and >= 0. This is
+    /// the speed envelope that scales authored root displacement; it is not a
+    /// position or velocity vector.
+    /// </summary>
+    public float CurrentMoveSpeedMetersPerSecond => _moveSpeed.CurrentMetersPerSecond;
+
+    /// <summary>Phase 2I target movement speed (m/s) requested this frame.</summary>
+    public float TargetMoveSpeedMetersPerSecond => _targetMoveSpeed;
+
+    /// <summary>
+    /// Phase 2I authored steady-state speed (m/s) of the active clip (0 for
+    /// idle). Derived from animation root displacement, duration, and world
+    /// scale; never a literal constant.
+    /// </summary>
+    public float ActiveClipAuthoredSpeedMetersPerSecond => AuthoredSpeedFor(ActiveClipName);
+
+    /// <summary>
+    /// Phase 2I root-motion gain applied this frame
+    /// (<c>current speed / active-clip authored speed</c>). Normally 1 while
+    /// walking/running steadily, ramps from 0 on start, and may temporarily
+    /// exceed 1 during run-to-walk deceleration (bounded by the run/walk speed
+    /// ratio).
+    /// </summary>
+    public float RootMotionGain => _rootMotionGain;
+
+    /// <summary>Phase 2I authored walk speed (m/s) derived from the walk clip.</summary>
+    public float WalkAuthoredSpeedMetersPerSecond => _walkAuthoredSpeed;
+
+    /// <summary>Phase 2I authored run speed (m/s) derived from the run clip.</summary>
+    public float RunAuthoredSpeedMetersPerSecond => _runAuthoredSpeed;
+
+    /// <summary>
     /// Provide portable animation data so locomotion can consume authored root
     /// motion. Without this (e.g. Phase 2D diagnostic tests) Update performs
     /// clip selection only and Erika stays in place. The platform host calls
@@ -112,6 +149,17 @@ public sealed class GameSession
         _runClip = runClip;
         _previousClipElapsed = 0;
         Transition = null;
+
+        // Phase 2I: derive the authoritative steady-state speeds from the
+        // authored root displacement (no literal walk/run magic numbers) and
+        // start the movement-speed envelope at rest.
+        _walkAuthoredSpeed = RootMotionEvaluator.ComputeHorizontalSpeedMetersPerSecond(
+            walkClip, _hipsBoneIndex, ErikaFigure.Scale);
+        _runAuthoredSpeed = RootMotionEvaluator.ComputeHorizontalSpeedMetersPerSecond(
+            runClip, _hipsBoneIndex, ErikaFigure.Scale);
+        _moveSpeed.Reset(0f);
+        _targetMoveSpeed = 0f;
+        _rootMotionGain = 0f;
     }
 
     /// <summary>
@@ -168,27 +216,42 @@ public sealed class GameSession
             diagnostic = ErikaFigure.RunClipName;
         }
 
+        // Phase 2I: resolve the requested locomotion clip, whether it is a
+        // diagnostic request, and this frame's movement-speed target. The target
+        // is authored-clip-derived (never a literal speed). With no intent and no
+        // diagnostic, the active walk/run clip is *held* as the single
+        // root-motion authority until the speed envelope reaches zero; only then
+        // does idle become the request, so stopping decelerates through the
+        // authored animation rather than halting instantly.
         string requested;
         bool requestedViaDiagnostic;
+        float targetSpeed;
         if (hasMovement)
         {
             requested = input.Sprint ? ErikaFigure.RunClipName : ErikaFigure.WalkClipName;
             requestedViaDiagnostic = false;
+            targetSpeed = AuthoredSpeedFor(requested);
         }
         else if (diagnostic is not null)
         {
             requested = diagnostic;
             requestedViaDiagnostic = true;
+            targetSpeed = AuthoredSpeedFor(diagnostic);
         }
         else if (_diagnosticLatch)
         {
             requested = ActiveClipName;
             requestedViaDiagnostic = true;
+            targetSpeed = AuthoredSpeedFor(ActiveClipName);
         }
         else
         {
-            requested = ErikaFigure.IdleClipName;
             requestedViaDiagnostic = false;
+            targetSpeed = 0f;
+            requested = IsLocomotionClip(ActiveClipName)
+                && _moveSpeed.CurrentMetersPerSecond > MovementSpeedEnvelope.ZeroSpeedThresholdMetersPerSecond
+                    ? ActiveClipName
+                    : ErikaFigure.IdleClipName;
         }
 
         if (!string.Equals(requested, ActiveClipName, StringComparison.Ordinal))
@@ -230,25 +293,64 @@ public sealed class GameSession
             Transition = null;
         }
 
+        // Phase 2I: integrate the movement-speed envelope toward this frame's
+        // target. Acceleration/deceleration are elapsed-time based, so the same
+        // total time yields the same speed regardless of frame rate, and the
+        // result never overshoots or goes negative.
+        _targetMoveSpeed = targetSpeed;
+        _moveSpeed.Advance(
+            targetSpeed,
+            frameTime.DeltaSeconds,
+            MovementSpeedEnvelope.DefaultAccelerationMetersPerSecondSquared,
+            MovementSpeedEnvelope.DefaultDecelerationMetersPerSecondSquared);
+
+        // Phase 2I stop hand-off: once released movement has decelerated to the
+        // zero threshold, clamp exactly to zero and begin the idle crossfade. The
+        // residual stopping travel above already came from the held clip's root
+        // motion, so no separate inertia/velocity system exists.
+        if (targetSpeed == 0f
+            && !hasMovement
+            && diagnostic is null
+            && !_diagnosticLatch
+            && IsLocomotionClip(ActiveClipName)
+            && _moveSpeed.CurrentMetersPerSecond <= MovementSpeedEnvelope.ZeroSpeedThresholdMetersPerSecond)
+        {
+            _moveSpeed.ClampToZero();
+            StartTransition(ErikaFigure.IdleClipName, frameTime.TotalSeconds);
+        }
+
         var currentElapsed = frameTime.TotalSeconds - ClipStartSeconds;
         if (currentElapsed < 0)
         {
             currentElapsed = 0;
         }
 
-        // Authored root motion is the locomotion authority (no magic speed).
-        // Only the destination (ActiveClipName) clip contributes; a transition's
-        // source pose never adds a second root delta. Idle never moves (its
-        // small Hips drift stays skeletal only).
+        // Authored root motion remains the single locomotion authority (no magic
+        // speed, no second translation system). Only the destination
+        // (ActiveClipName) clip contributes; a transition's source pose never
+        // adds a second root delta. Idle never moves (its small Hips drift stays
+        // skeletal only). Phase 2I scales the authored horizontal world delta by
+        // the speed gain (current / authored active-clip speed), so starts ramp
+        // in, stops ramp out, and walk<->run keep world speed continuous while
+        // the path and direction still come entirely from the animation.
+        _rootMotionGain = 0f;
         if (HasRootMotionData() && IsLocomotionClip(ActiveClipName))
         {
-            var clip = string.Equals(ActiveClipName, ErikaFigure.RunClipName, StringComparison.Ordinal)
-                ? _runClip!
-                : _walkClip!;
+            var isRun = string.Equals(ActiveClipName, ErikaFigure.RunClipName, StringComparison.Ordinal);
+            var clip = isRun ? _runClip! : _walkClip!;
+            var authoredSpeed = isRun ? _runAuthoredSpeed : _walkAuthoredSpeed;
+            var gain = authoredSpeed > 1e-6f ? _moveSpeed.CurrentMetersPerSecond / authoredSpeed : 0f;
+            if (!float.IsFinite(gain) || gain < 0f)
+            {
+                gain = 0f;
+            }
+
+            _rootMotionGain = gain;
+
             var deltaNative = RootMotionEvaluator.ComputeDelta(clip, _hipsBoneIndex, _previousClipElapsed, currentElapsed);
             if (float.IsFinite(deltaNative.X) && float.IsFinite(deltaNative.Y) && float.IsFinite(deltaNative.Z))
             {
-                var horizontalMeters = new Vector3(deltaNative.X, 0f, deltaNative.Z) * ErikaFigure.Scale;
+                var horizontalMeters = new Vector3(deltaNative.X, 0f, deltaNative.Z) * (ErikaFigure.Scale * gain);
                 if (float.IsFinite(horizontalMeters.X) && float.IsFinite(horizontalMeters.Z))
                 {
                     var heading = Quaternion.CreateFromYawPitchRoll(ErikaYawRadians, 0f, 0f);
@@ -341,6 +443,21 @@ public sealed class GameSession
     private static bool IsLocomotionClip(string clipName) =>
         string.Equals(clipName, ErikaFigure.WalkClipName, StringComparison.Ordinal) ||
         string.Equals(clipName, ErikaFigure.RunClipName, StringComparison.Ordinal);
+
+    private float AuthoredSpeedFor(string clipName)
+    {
+        if (string.Equals(clipName, ErikaFigure.RunClipName, StringComparison.Ordinal))
+        {
+            return _runAuthoredSpeed;
+        }
+
+        if (string.Equals(clipName, ErikaFigure.WalkClipName, StringComparison.Ordinal))
+        {
+            return _walkAuthoredSpeed;
+        }
+
+        return 0f;
+    }
 
     private void SyncErikaInstance()
     {

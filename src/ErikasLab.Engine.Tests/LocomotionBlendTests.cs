@@ -219,17 +219,29 @@ public sealed class LocomotionBlendTests
     }
 
     [Fact]
-    public void WalkToIdleTransitionCompletes()
+    public void WalkToIdleDeceleratesThenCompletesIdleCrossfade()
     {
         var session = SessionWithClips();
         session.Update(new FrameTime(1.0, 0.016), Move(forward: true));
         session.Update(new FrameTime(1.1, 0.1), Move(forward: true));
-        session.Update(new FrameTime(1.1, 0.0), NoInput());
-        Assert.NotNull(session.Transition);
 
+        // Phase 2I: releasing holds walk as the root-motion authority while the
+        // speed envelope decays; no stop crossfade starts yet.
+        session.Update(new FrameTime(1.1, 0.0), NoInput());
+        Assert.Equal(ErikaFigure.WalkClipName, session.ActiveClipName);
+        Assert.True(session.CurrentMoveSpeedMetersPerSecond > 0f);
+
+        // Once decelerated to zero, idle becomes active and a walk->idle
+        // crossfade begins.
         session.Update(new FrameTime(1.4, 0.3), NoInput());
-        Assert.Null(session.Transition);
         Assert.Equal(ErikaFigure.IdleClipName, session.ActiveClipName);
+        Assert.Equal(0f, session.CurrentMoveSpeedMetersPerSecond);
+        Assert.NotNull(session.Transition);
+        Assert.Equal(ErikaFigure.WalkClipName, session.Transition!.Value.SourceClipName);
+
+        // The idle crossfade then retires normally.
+        session.Update(new FrameTime(1.61, 0.21), NoInput());
+        Assert.Null(session.Transition);
     }
 
     [Fact]
@@ -284,22 +296,30 @@ public sealed class LocomotionBlendTests
     // --- interrupted transitions ----------------------------------------
 
     [Fact]
-    public void ReleasingMidBlendReversesContinuously()
+    public void ReleasingSprintMidBlendReversesContinuously()
     {
         var session = SessionWithClips();
         session.Update(new FrameTime(1.0, 0.016), Move(forward: true));
         session.Update(new FrameTime(1.05, 0.05), Move(forward: true));
-        var alpha = session.Transition!.Value.ProgressAt(1.05);
+
+        // Start a walk->run blend, then release Shift while movement is held.
+        session.Update(new FrameTime(1.06, 0.01), Move(forward: true, sprint: true));
+        Assert.Equal(ErikaFigure.RunClipName, session.ActiveClipName);
+        var runBlend = session.Transition!.Value;
+
+        session.Update(new FrameTime(1.07, 0.01), Move(forward: true));
+        var alpha = runBlend.ProgressAt(1.07);
         Assert.True(alpha > 0f && alpha < 1f);
 
-        session.Update(new FrameTime(1.05, 0.0), NoInput());
-
+        // Phase 2F reversal still applies when the requested clip is the source
+        // of the in-flight blend: source/destination swap and progress remaps to
+        // 1 - alpha, so the visible pose is continuous (no pop).
         var reversed = session.Transition;
         Assert.NotNull(reversed);
-        Assert.Equal(ErikaFigure.WalkClipName, reversed.Value.SourceClipName);
-        Assert.Equal(ErikaFigure.IdleClipName, reversed.Value.DestinationClipName);
-        Assert.Equal(1f - alpha, reversed.Value.ProgressAt(1.05), precision: 4);
-        Assert.Equal(ErikaFigure.IdleClipName, session.ActiveClipName);
+        Assert.Equal(ErikaFigure.RunClipName, reversed.Value.SourceClipName);
+        Assert.Equal(ErikaFigure.WalkClipName, reversed.Value.DestinationClipName);
+        Assert.Equal(ErikaFigure.WalkClipName, session.ActiveClipName);
+        Assert.Equal(1f - alpha, reversed.Value.ProgressAt(1.07), precision: 3);
     }
 
     [Fact]
@@ -342,14 +362,20 @@ public sealed class LocomotionBlendTests
     }
 
     [Fact]
-    public void NoStaleSourceAfterCompletion()
+    public void StopCrossfadeStartsWithNoStaleSource()
     {
         var session = SessionWithClips();
         session.Update(new FrameTime(1.0, 0.016), Move(forward: true));
         session.Update(new FrameTime(1.3, 0.3), Move(forward: true));
         Assert.Null(session.Transition);
 
+        // Release with nonzero speed holds walk, so no stop crossfade exists yet.
         session.Update(new FrameTime(1.3, 0.0), NoInput());
+        Assert.Equal(ErikaFigure.WalkClipName, session.ActiveClipName);
+        Assert.Null(session.Transition);
+
+        // Once decelerated to zero, the fresh walk->idle blend starts from walk.
+        session.Update(new FrameTime(1.5, 0.2), NoInput());
         var fresh = session.Transition;
         Assert.NotNull(fresh);
         Assert.Equal(ErikaFigure.WalkClipName, fresh.Value.SourceClipName);

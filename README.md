@@ -125,6 +125,36 @@ character who immediately turns 180°. Degenerate camera-at-target cases fall
 back to the orbit basis (finite, roll-free). Root motion, crossfades, loop
 seams, and orbit/facing independence are unchanged.
 
+Phase 2I adds: acceleration/deceleration movement response on top of the Phase
+2E/2F root-motion locomotion, without adding a second motion authority. A
+portable `MovementSpeedEnvelope` (Engine) owns one finite, non-negative
+meters-per-second scalar that ramps toward a target with elapsed-time
+`MoveTowards(current, target, rate * dt)` — centralized acceleration
+(16 m/s²) and deceleration (24 m/s²) rates, clamped to the target (no
+overshoot, no NaN, stable under large `dt`). The target is derived from movement
+intent (no movement → 0, walk/run → authored clip speed), where the authored
+speed comes from the clip's net Hips horizontal displacement, duration, and
+`ErikaFigure.Scale` (`RootMotionEvaluator.ComputeHorizontalSpeedMetersPerSecond`;
+walk ≈ 1.685 m/s, run ≈ 5.586 m/s with the shipped sidecars) — never a literal
+speed constant. The active clip stays the sole root-motion authority: the
+evaluated authored world delta is scaled by
+`gain = currentSpeed / activeClipAuthoredSpeed`, so starts ramp in from 0, stops
+ramp out to 0, and walk↔run keep world speed continuous; path and direction still
+come entirely from the animation and the smoothed facing. Releasing movement keeps
+the current walk/run clip as authority and coasts through its authored root motion
+until the speed reaches a 0.01 m/s threshold, at which point speed is clamped to
+exactly zero and the normal 0.20 s crossfade to idle begins; camera orbit after
+release never steers Erika (no new movement intent means the facing is retained).
+Run-to-walk may temporarily scale the walk clip's root delta above 1 (observed peak
+gain ≈ 3.08 at 60 Hz) during the brief deceleration, which is bounded and converges
+to 1. Animation playback rate is intentionally not speed-scaled yet, so transient
+foot sliding during acceleration/deceleration is an acknowledged Phase 2I
+limitation. Camera targeting, crossfades, yaw smoothing, spawn facing, and loop
+accumulation are unchanged; a latent float-rounding seam bug in
+`RootMotionEvaluator` (a remainder just below the loop duration folding back to 0
+without advancing the loop, which could emit a near-full-loop reverse snap) was
+fixed and covered by a regression test.
+
 Meshes are generated in code for the proof scene, and canonical Erika arrives through the content pipeline described below, so no manual asset authoring is required yet.
 
 ## Erika content (Phase 2B)
@@ -248,8 +278,9 @@ no scale; Hips is the sole translation track):
   diffuse textures, depth, lighting, and world rendering; static path retained
   for non-Erika models. Engine/Game stay free of MonoGame/Windows types.
 - Limitations: three clips with short crossfades (no blend trees/state machine);
-  no acceleration/deceleration, turn-in-place/lean animations (headings turn at a
-  constant rate), strafing/backwards
+  no turn-in-place/lean animations (headings turn at a constant rate), no
+  animation playback-rate scaling (Phase 2I ramps root displacement, so brief
+  acceleration/deceleration foot sliding is expected), strafing/backwards
   clips (Erika faces the heading and uses the forward clip), foot IK, layers,
   retargeting, physics, collision/gravity/jumping, or movement. WASD drives Erika
   camera-relatively (default camera: W=-Z, S=+Z, A=-X, D=+X); the camera itself
@@ -303,7 +334,7 @@ final view the renderer consumes. The renderer never computes follow behavior.
 
 ## Deferred work
 
-Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation state machines/blend trees, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. Phase 2F covered short crossfades and turn-rate smoothing; Phase 2G added the third-person follow/orbit camera; Phase 2H made the camera continuously look at Erika and aligned her spawn facing with initial forward movement. The smallest logical next step is a camera collision/obstruction pass once real environment geometry exists (raycast or spherecast against walls/props/terrain), or a small movement-feel pass (acceleration/deceleration and turn-in-place) that still leaves root-motion authority unchanged.
+Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation state machines/blend trees, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. Phase 2F covered short crossfades and turn-rate smoothing; Phase 2G added the third-person follow/orbit camera; Phase 2H made the camera continuously look at Erika and aligned her spawn facing with initial forward movement; Phase 2I added acceleration/deceleration movement response (speed envelope scaling the single authored root-motion authority). The smallest logical next step is turn-in-place (a stationary 180°/90° turn animation selected from directional intent, still leaving root-motion authority unchanged), or a camera collision/obstruction pass once real environment geometry exists (raycast or spherecast against walls/props/terrain).
 
 ## Repository hygiene
 

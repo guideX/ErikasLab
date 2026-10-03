@@ -130,6 +130,23 @@ public sealed class RootMotionTests
     }
 
     [Fact]
+    public void ElapsedJustBelowLoopBoundaryDoesNotSnapBack()
+    {
+        var clip = WalkSynthetic();
+        // A double just below the 1.0 s boundary rounds up to the duration when
+        // narrowed to float. The absolute root must stay at the seam (net), not
+        // fold back to zero and drop a whole loop of travel.
+        var before = RootMotionEvaluator.ComputeAbsoluteRoot(clip, 0, 0.9999999999999999);
+        var at = RootMotionEvaluator.ComputeAbsoluteRoot(clip, 0, 1.0);
+        Assert.True(before.Z > 4.99f);
+        Assert.Equal(5f, at.Z, precision: 4);
+
+        var delta = RootMotionEvaluator.ComputeDelta(clip, 0, 0.995, 0.9999999999999999);
+        Assert.Equal(0.025f, delta.Z, precision: 3);
+        Assert.True(delta.Z > 0f);
+    }
+
+    [Fact]
     public void MissingHipsTrackYieldsZeroMotion()
     {
         var skeleton = HipsSkeleton();

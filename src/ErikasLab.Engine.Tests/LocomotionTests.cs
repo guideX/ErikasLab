@@ -230,15 +230,28 @@ public sealed class LocomotionTests
     }
 
     [Fact]
-    public void RunToIdleDoesNotTeleport()
+    public void RunReleaseDeceleratesThroughRootMotionInsteadOfTeleporting()
     {
         var session = SessionWithClips();
         session.Update(new FrameTime(30.0, 0.016), Move(forward: true, sprint: true));
         session.Update(new FrameTime(30.5, 0.5), Move(forward: true, sprint: true));
+        Assert.Equal(ErikaFigure.RunClipName, session.ActiveClipName);
+
+        // Phase 2I: releasing keeps the run clip as the root-motion authority and
+        // coasts a little. The step is finite and far smaller than a teleport.
         var before = session.ErikaPosition;
         session.Update(new FrameTime(30.516, 0.016), NoInput());
-        Assert.Equal(before.X, session.ErikaPosition.X, precision: 5);
-        Assert.Equal(before.Z, session.ErikaPosition.Z, precision: 5);
+        Assert.Equal(ErikaFigure.RunClipName, session.ActiveClipName);
+        Assert.True(session.CurrentMoveSpeedMetersPerSecond > 0f);
+        Assert.True(session.CurrentMoveSpeedMetersPerSecond < session.RunAuthoredSpeedMetersPerSecond);
+        var step = (session.ErikaPosition - before).Length();
+        Assert.True(step > 0f);
+        Assert.True(step < 0.2f);
+
+        // Continued release decelerates exactly to zero and hands off to idle.
+        session.Update(new FrameTime(31.516, 1.0), NoInput());
+        Assert.Equal(ErikaFigure.IdleClipName, session.ActiveClipName);
+        Assert.Equal(0f, session.CurrentMoveSpeedMetersPerSecond);
     }
 
     [Fact]

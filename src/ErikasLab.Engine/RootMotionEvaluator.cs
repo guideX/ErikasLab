@@ -59,6 +59,67 @@ public static class RootMotionEvaluator
     public static Vector3 GetNetDisplacement(AnimationClip clip, int hipsBoneIndex) =>
         GetEndTranslation(clip, hipsBoneIndex) - GetStartTranslation(clip, hipsBoneIndex);
 
+    /// <summary>
+    /// Authored horizontal (X/Z) locomotion speed in meters per second for a
+    /// clip, derived from its net root displacement, its duration, and the world
+    /// scale. This is the authoritative steady-state speed used to scale the
+    /// Phase 2I movement-speed envelope; no literal walk/run constants are
+    /// stored. Returns 0 (never NaN) for a missing root track, zero horizontal
+    /// displacement, non-finite data, or a non-positive/non-finite scale.
+    /// </summary>
+    public static float ComputeHorizontalSpeedMetersPerSecond(
+        AnimationClip clip,
+        int hipsBoneIndex,
+        float worldScale)
+    {
+        ArgumentNullException.ThrowIfNull(clip);
+        var start = GetStartTranslation(clip, hipsBoneIndex);
+        var end = GetEndTranslation(clip, hipsBoneIndex);
+        return HorizontalSpeedMetersPerSecond(start, end, clip.DurationSeconds, worldScale);
+    }
+
+    /// <summary>
+    /// Low-level authored-speed math: horizontal distance between two native
+    /// root samples, scaled to meters and divided by duration. Guards
+    /// zero/non-finite duration, scale, and samples so callers never see a
+    /// divide-by-zero or NaN.
+    /// </summary>
+    public static float HorizontalSpeedMetersPerSecond(
+        Vector3 start,
+        Vector3 end,
+        double durationSeconds,
+        float worldScale)
+    {
+        if (!float.IsFinite(worldScale) || worldScale <= 0f)
+        {
+            return 0f;
+        }
+
+        if (!double.IsFinite(durationSeconds) || durationSeconds <= 0.0)
+        {
+            return 0f;
+        }
+
+        if (!IsFinite(start) || !IsFinite(end))
+        {
+            return 0f;
+        }
+
+        var dx = end.X - start.X;
+        var dz = end.Z - start.Z;
+        var nativeNet = MathF.Sqrt(dx * dx + dz * dz);
+        if (!float.IsFinite(nativeNet) || nativeNet <= 0f)
+        {
+            return 0f;
+        }
+
+        var metersPerSecond = nativeNet * worldScale / (float)durationSeconds;
+        return float.IsFinite(metersPerSecond) && metersPerSecond > 0f ? metersPerSecond : 0f;
+    }
+
+    private static bool IsFinite(Vector3 value) =>
+        float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
+
     /// <summary>Horizontal (X/Z) part of a native-space root vector; Y is preserved elsewhere.</summary>
     public static Vector3 HorizontalOnly(Vector3 value) => new(value.X, 0f, value.Z);
 
@@ -86,19 +147,20 @@ public static class RootMotionEvaluator
         var net = channel.SampleTranslation(clip.DurationSeconds) - start;
 
         var loops = (long)Math.Floor(elapsedSeconds / duration);
-        var norm = (float)(elapsedSeconds - loops * duration);
+        var norm = elapsedSeconds - loops * duration;
 
-        // Guard floating-point edge cases back into [0, duration).
-        if (norm < 0f)
+        // Guard a negative remainder (floor edge) back to the loop start. Do NOT
+        // fold a remainder that merely *rounds up* to the duration when narrowed
+        // to float back to 0: that would silently drop one whole loop of net
+        // displacement and emit a near-full-loop reverse snap at the seam.
+        // Sampling at the duration clamps to the final key (start + net), which
+        // is exactly continuous with the next loop's start.
+        if (norm < 0.0)
         {
-            norm = 0f;
-        }
-        else if (norm >= clip.DurationSeconds)
-        {
-            norm = 0f;
+            norm = 0.0;
         }
 
-        var current = channel.SampleTranslation(norm);
+        var current = channel.SampleTranslation((float)norm);
         return new Vector3(
             loops * net.X + (current.X - start.X),
             loops * net.Y + (current.Y - start.Y),
