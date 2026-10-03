@@ -28,14 +28,14 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
 
         Content.RootDirectory = "Content";
         IsMouseVisible = false;
-        Window.Title = "Erika's Lab - Phase 2F";
+        Window.Title = "Erika's Lab - Phase 2G";
         Window.AllowUserResizing = true;
         Window.ClientSizeChanged += OnClientSizeChanged;
     }
 
     protected override void Initialize()
     {
-        Console.WriteLine("Erika's Lab | Phase 2F | initializing");
+        Console.WriteLine("Erika's Lab | Phase 2G | initializing");
         Console.WriteLine($"Runtime: {RuntimeInformation.FrameworkDescription} ({RuntimeInformation.ProcessArchitecture})");
         base.Initialize();
     }
@@ -82,7 +82,8 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
             throw;
         }
 
-        Console.WriteLine("Controls: W/A/S/D move (Shift sprint), mouse or arrow keys look, 1/2/3 diagnostic idle/walk/run, Escape exits");
+        Console.WriteLine($"Camera policy: {_gameSession.CameraRig.DescribePolicy()}");
+        Console.WriteLine("Controls: W/A/S/D move (Shift sprint, camera-relative), mouse or arrow keys orbit, 1/2/3 diagnostic idle/walk/run, Escape exits");
     }
 
     protected override void Update(GameTime gameTime)

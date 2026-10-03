@@ -41,13 +41,13 @@ The host is framework-dependent and uses the installed .NET 8 runtime. The proje
 - `W` / `S`: move forward / backward (camera-relative; Erika faces the heading and walks forward)
 - `A` / `D`: move left / right (camera-relative, normalized diagonals)
 - `Shift`: sprint modifier (movement + Shift plays run, movement alone plays walk)
-- Mouse: look around; the pointer is recentered while the game is focused
-- Arrow keys: keyboard look fallback
+- Mouse: orbit the third-person camera around Erika; the pointer is recentered while the game is focused
+- Arrow keys: keyboard orbit fallback
 - `1` / `2` / `3`: diagnostic idle / walk / run selector (hard switch, latches; movement takes precedence)
 - `Escape`: exit
 
-No movement input plays idle (stationary). `Shift` alone stays idle. WASD now drives
-Erika; the camera keeps look only and no longer translates with WASD.
+No movement input plays idle (stationary). `Shift` alone stays idle. WASD drives
+Erika; the third-person camera orbits on look input and never translates with WASD.
 Movement is driven by portable `FrameTime.DeltaSeconds` plus authored root-motion
 displacement, so it is not frame-rate dependent.
 
@@ -104,6 +104,15 @@ Interruptions replace the single transition (releasing mid-blend reverses it by
 swapping ends and remapping progress to `1 - alpha`), so no pop, no teleport, no
 double root motion, and no unbounded state. Idle stays root-suppressed; `1`/`2`/`3`
 diagnostics are unchanged.
+
+Phase 2G adds: a portable third-person follow/orbit camera (`ThirdPersonCamera`)
+that observes Erika's authoritative world position without owning it. Mouse or
+arrow look orbits yaw/pitch around her; position trails via elapsed-time
+exponential smoothing (`alpha = 1 - exp(-rate * dt)`, frame-rate independent,
+bounded, no overshoot), and spawn/session-reset or a >25 m target jump snaps
+instead of flying. WASD stays camera-relative (basis = horizontal orbit
+forward/right), Erika keeps her own smoothed facing, and camera pitch never adds
+vertical travel. Camera collision is intentionally deferred.
 
 Meshes are generated in code for the proof scene, and canonical Erika arrives through the content pipeline described below, so no manual asset authoring is required yet.
 
@@ -237,9 +246,40 @@ no scale; Hips is the sole translation track):
   match the canonical 67 joints (names, parents, bind pose) or content load
   fails loudly.
 
+## Third-person camera (Phase 2G)
+
+Erika is followed by a compact portable rig (`ThirdPersonCamera`, Engine) that
+owns only orbit angles, follow distance, look-at height, and the smoothed camera
+position; `GameSession` keeps Erika's position/facing and `CameraState` is the
+final view the renderer consumes. The renderer never computes follow behavior.
+
+- Model: `target = ErikaPosition + (0, 1.25, 0)`; `desired = target -
+  orbitForward * 4.5`; `camera.Forward` is the player-controlled orbit basis, so
+  at rest it equals `normalize(target - camera.Position)`.
+- Initial framing: distance 4.50 m, look-at height 1.25 m, orbit yaw 0.00 rad
+  (along the Phase 1 forward, -Z, behind the initial movement heading), pitch
+  -0.28 rad (~-16 deg, slightly above and looking down). Spawn snaps to this
+  frame (no fly-in).
+- Orbit: mouse (0.0025 rad/px) and arrow keys (1.7 rad/s) drive yaw/pitch; yaw
+  wraps to (-pi, pi] with no boundary jump and pitch clamps to [-1.20, +0.50]
+  rad (~-68.8 deg to +28.6 deg) so the camera cannot flip through the poles.
+  All elapsed-time based.
+- Follow smoothing: exponential toward the desired position at rate 10/s
+  (time constant ~0.10 s): frame-rate independent, deterministic, bounded,
+  overshoot-free, allocation-free. Snaps on first use/reset or when the target
+  discontinuity exceeds 25 m, so initialization never flies across the world.
+- Camera-relative movement: WASD derives from the camera's horizontal
+  forward/right basis; pitch is dropped (Y=0) so looking up/down never adds
+  vertical player movement; diagonals normalize; opposite keys cancel.
+- Facing independence: orbiting while stationary leaves Erika's yaw untouched;
+  after orbiting, WASD uses the new camera direction and Erika turns toward it
+  through the existing Phase 2F yaw smoother (no MMO mouse-lock).
+- Deferred: no camera collision/occlusion/raycasts; the camera may pass through
+  walls, terrain, and props until real environment geometry exists.
+
 ## Deferred work
 
-Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation state machines/blend trees, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. Phase 2F covered short crossfades and turn-rate smoothing; the smallest logical next step is a small movement-feel pass (acceleration/deceleration and turn-in-place) that still leaves root-motion authority unchanged, or dedicated strafe/backward clips if the animation set is expanded.
+Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation state machines/blend trees, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. Phase 2F covered short crossfades and turn-rate smoothing; Phase 2G added the third-person follow/orbit camera. The smallest logical next step is a camera collision/obstruction pass once real environment geometry exists (raycast or spherecast against walls/props/terrain), or a small movement-feel pass (acceleration/deceleration and turn-in-place) that still leaves root-motion authority unchanged.
 
 ## Repository hygiene
 

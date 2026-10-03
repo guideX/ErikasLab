@@ -7,7 +7,7 @@ public sealed class GameSession
 {
     public const string Version = "0.1.0-phase1";
 
-    private readonly CameraController _cameraController = new();
+    private readonly ThirdPersonCamera _thirdPersonCamera = new();
 
     /// <summary>
     /// Phase 2F centralized locomotion crossfade duration. One short blend for
@@ -33,14 +33,26 @@ public sealed class GameSession
     public GameSession()
     {
         World = TestWorldFactory.Create();
-        Camera = new CameraState(new Vector3(0, 3.2f, 9.5f), pitchRadians: -0.08f);
+        Camera = new CameraState(new Vector3(0, 3.2f, 9.5f));
         ErikaPosition = ErikaFigure.GroundPosition;
         ErikaYawRadians = ErikaFigure.FacingYawRadians;
+
+        // Phase 2G: establish a settled third-person frame at spawn (snap, not
+        // a cross-world fly-in). No collision yet; the camera may pass through
+        // scene geometry.
+        _thirdPersonCamera.SnapToTarget(Camera, ErikaPosition);
     }
 
     public Scene World { get; }
 
     public CameraState Camera { get; }
+
+    /// <summary>
+    /// Phase 2G third-person follow/orbit rig. Owns orbit angles, follow
+    /// distance/look-at height, and the smoothed camera position. It observes
+    /// Erika's world state and never owns gameplay movement or facing.
+    /// </summary>
+    public ThirdPersonCamera CameraRig => _thirdPersonCamera;
 
     public bool ExitRequested { get; private set; }
 
@@ -96,11 +108,11 @@ public sealed class GameSession
     }
 
     /// <summary>
-    /// Camera-relative movement intent from WASD: horizontal camera forward /
-    /// right basis (existing camera architecture, no camera redesign),
-    /// normalized so diagonals are unit length (W+D is not faster than W).
-    /// Returns zero when there is no movement input (including opposite keys
-    /// canceling, e.g. W+S).
+    /// Camera-relative movement intent from WASD: the camera's horizontal
+    /// forward / right basis (Phase 2G third-person orbit; Y dropped so pitch
+    /// never adds vertical travel), normalized so diagonals are unit length
+    /// (W+D is not faster than W). Returns zero when there is no movement input
+    /// (including opposite keys canceling, e.g. W+S).
     /// World mapping at default camera yaw (forward -Z, right +X):
     /// W=(0,0,-1), S=(0,0,+1), A=(-1,0,0), D=(+1,0,0), diagonals normalized.
     /// </summary>
@@ -144,17 +156,11 @@ public sealed class GameSession
     {
         ExitRequested |= input.ExitRequested;
 
-        // Phase 2E control routing: WASD now drives Erika (movement intent).
-        // The camera keeps look (mouse/arrows) but no longer translates with
-        // WASD; this is a control reassignment, not a camera-system redesign.
-        var cameraInput = input with
-        {
-            MoveForward = false,
-            MoveBackward = false,
-            StrafeLeft = false,
-            StrafeRight = false,
-        };
-        _cameraController.Update(Camera, cameraInput, frameTime);
+        // Phase 2G: orbit from look input (mouse/arrows) and follow Erika's
+        // authoritative world position. Orientation is written before intent so
+        // this frame's WASD uses the current camera basis; position follows with
+        // a small smoothed lag. WASD still drives Erika, never the camera.
+        _thirdPersonCamera.Update(Camera, ErikaPosition, input, frameTime);
 
         var intent = ComputeMovementIntent(input);
         var hasMovement = intent.LengthSquared() > 1e-8f;

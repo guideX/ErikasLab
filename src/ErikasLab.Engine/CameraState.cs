@@ -74,4 +74,16 @@ public sealed class CameraState
         YawRadians += yawDeltaRadians;
         PitchRadians = Math.Clamp(PitchRadians + pitchDeltaRadians, -MaxPitchRadians, MaxPitchRadians);
     }
+
+    /// <summary>
+    /// Set the view orientation directly (Phase 2G third-person orbit). Yaw is
+    /// applied verbatim; pitch is clamped to the same safe range as
+    /// <see cref="Rotate"/>, so a follow/orbit controller can drive the view
+    /// without the free-look delta bookkeeping.
+    /// </summary>
+    public void SetLook(float yawRadians, float pitchRadians)
+    {
+        YawRadians = yawRadians;
+        PitchRadians = Math.Clamp(pitchRadians, -MaxPitchRadians, MaxPitchRadians);
+    }
 }
