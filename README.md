@@ -157,6 +157,35 @@ fixed and covered by a regression test.
 
 Phase 2J adds: stationary turn-in-place on top of the Phase 2F yaw smoother and Phase 2I speed envelope, without a second motion authority. When Erika is effectively stationary (current Phase 2I speed at or below a centralized 0.1 m/s threshold) and the requested camera-relative heading differs from her current yaw by at least a centralized 45° enter angle, she enters a turn-in-place state: the authoritative yaw rotates through the existing 4π rad/s shortest-path smoother while idle stays the visual clip and the translational target stays zero, so a large heading change reads as a deliberate stationary pivot rather than a sliding idle. Once the wrapped heading error falls to a centralized 15° release angle (hysteresis against the 45° enter angle, so boundary input cannot flicker the state), the gate lifts and the normal Phase 2I acceleration envelope begins toward the authored walk/run speed. Small corrections (< 45°) keep the ordinary Phase 2F behavior (smooth turn while travel begins); residual/coasting motion above the stationary threshold never enters a turn (the existing coast-facing policy is preserved), and only once the speed reaches the threshold may a new stationary turn begin. Losing directional intent cancels the turn immediately and retains the facing; a mid-turn direction change retargets the newest heading via shortest-path math with no queued turns. Shift during a gated turn only selects the post-turn run target — it never creates run displacement during the turn. Camera orbit alone never rotates Erika; orbiting updates the control basis so a new direction requests the fresh heading. No authored turn clips exist in the asset library (only idle/walk/run are imported), so the procedural fallback is used: idle remains the visual clip while the authoritative yaw rotates, and proper authored turn clips can replace the visual later without changing the gameplay state contract. Root-motion authority is unchanged: the active locomotion clip remains the sole translational authority, the turn state itself applies no world translation, and the Phase 2I speed envelope, loop seams, crossfades, camera targeting, and spawn facing are untouched. The known foot-slide limitation (animation playback rate is intentionally not speed-scaled) remains unresolved.
 
+Phase 2K adds: locomotion visual playback-rate synchronization on top of the
+Phase 2I speed envelope, without adding a second motion authority. A portable
+`AnimationPlaybackClock` (Engine) owns the visual *pose* phase separately from
+the authoritative root-motion clock: it advances by
+`poseElapsed += ((previousRate + currentRate) * 0.5) * dt` (trapezoidal,
+matching the linear `MoveTowards` speed ramp), wraps into `[0, duration)` with
+exact-boundary semantics (exact multiple maps to 0, just-below-duration is
+preserved, just-above-duration wraps to the remainder), and is allocation-free.
+`GameSession` owns the active-clip pose clock plus an independent outgoing-clip
+clock during a crossfade, and derives each clip's visual rate as
+`currentSpeed / authoredSpeed` through the centralized `LocomotionPlaybackRates`
+helper, clamped to `[0, 2]`. Steady walk/run render at exactly 1×; idle is always
+1× and never tied to translational speed; starts ramp up from 0; coasting ramps
+down toward 0; walk→run begins the run clip below 1× (≈0.35 at the shipped
+speeds) and converges to 1× as Erika accelerates; run→walk's raw rate (up to
+≈3.08, the run/walk authored ratio ≈3.31) is capped at 2× for ≈0.08 s, leaving
+a short residual stride mismatch rather than a ≈3× walk cycle. The renderer now
+samples explicit pose times passed from the session (`PoseElapsedSeconds` /
+`SourcePoseElapsedSeconds` / `DestinationPoseElapsedSeconds`) instead of
+deriving them from the absolute clock, so it never integrates gameplay animation
+timing; crossfade blend alpha remains transition-elapsed / 0.20 s and is
+unchanged, and each side of a blend advances its own clock and rate. The
+root-motion clock (`ClipStartSeconds` + absolute time), the single root-motion
+authority, the Phase 2I gain, loop/seam handling, yaw smoothing, camera, spawn
+facing, and Phase 2J turn-in-place (idle visual, zero translation) are all
+unchanged: world position, yaw, and speed are bit-identical with synchronization
+on or off (verified at 30/60/144 Hz). Residual foot sliding remains only in the
+capped run→walk window; stride warping and foot IK are still deferred.
+
 Meshes are generated in code for the proof scene, and canonical Erika arrives through the content pipeline described below, so no manual asset authoring is required yet.
 
 ## Erika content (Phase 2B)
@@ -281,9 +310,10 @@ no scale; Hips is the sole translation track):
   for non-Erika models. Engine/Game stay free of MonoGame/Windows types.
 - Limitations: three clips with short crossfades (no blend trees/state machine);
   no authored turn-in-place/lean animations (Phase 2J turns stationarily via the
-  procedural idle + yaw-rotation fallback at a constant rate), no
-  animation playback-rate scaling (Phase 2I ramps root displacement, so brief
-  acceleration/deceleration foot sliding is expected), strafing/backwards
+  procedural idle + yaw-rotation fallback at a constant rate); visual locomotion
+  playback is now speed-synchronized (Phase 2K) but run→walk caps the walk
+  cadence at 2×, so a short residual foot slide remains there, and no stride
+  warping/foot IK exists; strafing/backwards
   clips (Erika faces the heading and uses the forward clip), foot IK, layers,
   retargeting, physics, collision/gravity/jumping, or movement. WASD drives Erika
   camera-relatively (default camera: W=-Z, S=+Z, A=-X, D=+X); the camera itself
@@ -337,7 +367,7 @@ final view the renderer consumes. The renderer never computes follow behavior.
 
 ## Deferred work
 
-Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation state machines/blend trees, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. Phase 2F covered short crossfades and turn-rate smoothing; Phase 2G added the third-person follow/orbit camera; Phase 2H made the camera continuously look at Erika and aligned her spawn facing with initial forward movement; Phase 2I added acceleration/deceleration movement response (speed envelope scaling the single authored root-motion authority); Phase 2J added stationary turn-in-place (a gated 45°-enter/15°-release procedural pivot that holds idle and zero translational target until the heading error is resolved, then releases through the existing speed envelope). The smallest logical next step is a camera collision/obstruction pass once real environment geometry exists (raycast or spherecast against walls/props/terrain), or authored turn-in-place clips to replace the procedural visual fallback.
+Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation state machines/blend trees, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. Phase 2F covered short crossfades and turn-rate smoothing; Phase 2G added the third-person follow/orbit camera; Phase 2H made the camera continuously look at Erika and aligned her spawn facing with initial forward movement; Phase 2I added acceleration/deceleration movement response (speed envelope scaling the single authored root-motion authority); Phase 2J added stationary turn-in-place (a gated 45°-enter/15°-release procedural pivot that holds idle and zero translational target until the heading error is resolved, then releases through the existing speed envelope); Phase 2K synchronized the visible locomotion playback rate with the Phase 2I speed envelope through a separate pose clock, bounding the run→walk raw rate at 2×. The smallest logical next step is stride warping or foot IK to remove the remaining capped run→walk slide, authored turn-in-place clips to replace the procedural visual fallback, or a camera collision/obstruction pass once real environment geometry exists.
 
 ## Repository hygiene
 

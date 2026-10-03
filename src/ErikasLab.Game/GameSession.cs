@@ -52,6 +52,23 @@ public sealed class GameSession
     public const float TurnInPlaceReleaseAngleRadians = MathF.PI / 12f;
 
     private readonly MovementSpeedEnvelope _moveSpeed = new();
+
+    /// <summary>
+    /// Phase 2K active-clip visual pose clock. Advances with the speed-derived
+    /// playback rate and is sampled by the renderer for the visible stride.
+    /// Completely independent of the authoritative root-motion clock
+    /// (<see cref="ClipStartSeconds"/> + absolute game time), so it can never
+    /// influence world displacement.
+    /// </summary>
+    private AnimationPlaybackClock _poseClock = new();
+
+    /// <summary>
+    /// Phase 2K outgoing-clip visual pose clock while a crossfade is in flight
+    /// (null otherwise). Each side of the blend owns its own phase and rate.
+    /// </summary>
+    private AnimationPlaybackClock? _sourcePoseClock;
+
+    private AnimationClip? _idleClip;
     private AnimationClip? _walkClip;
     private AnimationClip? _runClip;
     private int _hipsBoneIndex = -1;
@@ -61,6 +78,8 @@ public sealed class GameSession
     private float _runAuthoredSpeed;
     private float _targetMoveSpeed;
     private float _rootMotionGain;
+    private float _visualPlaybackRate = 1f;
+    private float _rawVisualPlaybackRate = 1f;
     private bool _turnInPlaceActive;
     private bool _hasRequestedHeading;
     private float _requestedHeadingRadians;
@@ -162,6 +181,44 @@ public sealed class GameSession
     public float RunAuthoredSpeedMetersPerSecond => _runAuthoredSpeed;
 
     /// <summary>
+    /// Phase 2K visual playback synchronization toggle. True (default) derives
+    /// the visible locomotion cadence from the Phase 2I speed envelope; false
+    /// forces nominal 1x visual playback for every clip (the Phase 2I baseline).
+    /// This is a validation seam: gameplay world motion is identical either way,
+    /// which is exactly the invariant the root-motion independence tests assert.
+    /// Idle is always 1x regardless.
+    /// </summary>
+    public bool VisualPlaybackSynchronizationEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Phase 2K applied visual playback rate for the active clip this frame.
+    /// 1 for idle, <c>speed / authoredSpeed</c> clamped to
+    /// <c>[LocomotionPlaybackRates.MinimumRate, MaximumRate]</c> for walk/run.
+    /// Always finite and non-negative; never used for world displacement.
+    /// </summary>
+    public float VisualPlaybackRate => _visualPlaybackRate;
+
+    /// <summary>
+    /// Phase 2K raw (unbounded) visual playback rate for the active clip before
+    /// the centralized cap. Equal to <see cref="RootMotionGain"/> for
+    /// uncapped locomotion and may exceed <see cref="VisualPlaybackRate"/> during
+    /// a run-to-walk deceleration.
+    /// </summary>
+    public float RawVisualPlaybackRate => _rawVisualPlaybackRate;
+
+    /// <summary>
+    /// Phase 2K active-clip visual pose phase in <c>[0, clip duration)</c>.
+    /// Sampled by the renderer; independent of the root-motion clock.
+    /// </summary>
+    public double VisualPoseElapsedSeconds => _poseClock.ElapsedSeconds;
+
+    /// <summary>Phase 2K outgoing-clip visual pose phase during a crossfade (0 otherwise).</summary>
+    public double TransitionSourcePoseElapsedSeconds => _sourcePoseClock?.ElapsedSeconds ?? 0.0;
+
+    /// <summary>Phase 2K incoming-clip visual pose phase during a crossfade.</summary>
+    public double TransitionDestinationPoseElapsedSeconds => _poseClock.ElapsedSeconds;
+
+    /// <summary>
     /// Phase 2J true while a stationary turn-in-place is active. While active,
     /// the turn gates translation: idle stays the visual clip and the target
     /// movement speed stays zero until the heading error reaches
@@ -210,10 +267,19 @@ public sealed class GameSession
         ArgumentNullException.ThrowIfNull(runClip);
 
         _hipsBoneIndex = skeleton.TryGetBoneIndex(ErikaFigure.HipsBoneName, out var index) ? index : -1;
+        _idleClip = idleClip;
         _walkClip = walkClip;
         _runClip = runClip;
         _previousClipElapsed = 0;
         Transition = null;
+
+        // Phase 2K: start the visual pose clock at the idle loop origin at 1x.
+        // The root-motion clock is untouched; the two remain independent.
+        _poseClock = new AnimationPlaybackClock();
+        _poseClock.Reset(0.0, 1f);
+        _sourcePoseClock = null;
+        _visualPlaybackRate = 1f;
+        _rawVisualPlaybackRate = 1f;
 
         // Phase 2I: derive the authoritative steady-state speeds from the
         // authored root displacement (no literal walk/run magic numbers) and
@@ -402,6 +468,13 @@ public sealed class GameSession
             StartTransition(ErikaFigure.IdleClipName, frameTime.TotalSeconds);
         }
 
+        // Phase 2K: advance the independent visual pose clock(s) from this
+        // frame's speed envelope. This never feeds root motion below; it only
+        // decides which skeletal pose the renderer samples. The active clock
+        // drives ActiveClipName; during a crossfade the outgoing clip advances
+        // on its own clock and rate.
+        AdvancePoseClocks(frameTime.DeltaSeconds);
+
         var currentElapsed = frameTime.TotalSeconds - ClipStartSeconds;
         if (currentElapsed < 0)
         {
@@ -528,12 +601,14 @@ public sealed class GameSession
         var sourceStart = ClipStartSeconds;
         var destinationStart = now;
         var transitionStart = now;
+        var reversal = false;
 
         if (Transition is { } current)
         {
             if (string.Equals(requested, current.SourceClipName, StringComparison.Ordinal))
             {
                 // Reverse: continue from the same visible pose with swapped ends.
+                reversal = true;
                 sourceName = current.DestinationClipName;
                 sourceStart = current.DestinationClipStartSeconds;
                 destinationStart = current.SourceClipStartSeconds;
@@ -545,6 +620,23 @@ public sealed class GameSession
                 sourceName = current.DestinationClipName;
                 sourceStart = current.DestinationClipStartSeconds;
             }
+        }
+
+        // Phase 2K pose-clock policy (each side owns its own phase and rate):
+        // - the outgoing pose continues from whichever clip was most recently
+        //   the authority, which is the current active clock;
+        // - the incoming pose resumes the old source phase on a reversal (so an
+        //   interrupted blend never snaps its pose), or restarts at the loop
+        //   origin on a hard/chained switch (the established Phase 2F policy).
+        // The fresh destination clock is seeded with the new clip's current rate
+        // so its first trapezoidal step starts from the right cadence.
+        var outgoingClock = _poseClock;
+        var resumedClock = reversal ? _sourcePoseClock : null;
+        _sourcePoseClock = outgoingClock;
+        _poseClock = resumedClock ?? new AnimationPlaybackClock();
+        if (!reversal)
+        {
+            _poseClock.Reset(0.0, VisualRateFor(requested));
         }
 
         ActiveClipName = requested;
@@ -592,6 +684,68 @@ public sealed class GameSession
         }
 
         return 0f;
+    }
+
+    /// <summary>Loop duration (seconds) of a stable clip id; 0 when unavailable.</summary>
+    private double ClipDurationFor(string clipName)
+    {
+        if (string.Equals(clipName, ErikaFigure.RunClipName, StringComparison.Ordinal))
+        {
+            return _runClip?.DurationSeconds ?? 0.0;
+        }
+
+        if (string.Equals(clipName, ErikaFigure.WalkClipName, StringComparison.Ordinal))
+        {
+            return _walkClip?.DurationSeconds ?? 0.0;
+        }
+
+        return _idleClip?.DurationSeconds ?? 0.0;
+    }
+
+    /// <summary>
+    /// Phase 2K raw (uncapped) visual rate for a clip. Idle always plays at 1x
+    /// (never tied to translational speed); locomotion uses the centralized
+    /// <see cref="LocomotionPlaybackRates.RawRate"/> derivation.
+    /// </summary>
+    private float RawVisualRateFor(string clipName) =>
+        IsLocomotionClip(clipName)
+            ? LocomotionPlaybackRates.RawRate(_moveSpeed.CurrentMetersPerSecond, AuthoredSpeedFor(clipName))
+            : 1f;
+
+    /// <summary>
+    /// Phase 2K applied (bounded) visual rate for a clip. Idle is 1x; locomotion
+    /// is <c>speed / authoredSpeed</c> clamped to the centralized bounds. When
+    /// <see cref="VisualPlaybackSynchronizationEnabled"/> is false every clip
+    /// plays at nominal 1x (the Phase 2I baseline) without touching root motion.
+    /// </summary>
+    private float VisualRateFor(string clipName)
+    {
+        if (!VisualPlaybackSynchronizationEnabled || !IsLocomotionClip(clipName))
+        {
+            return 1f;
+        }
+
+        return LocomotionPlaybackRates.AppliedRate(_moveSpeed.CurrentMetersPerSecond, AuthoredSpeedFor(clipName));
+    }
+
+    /// <summary>
+    /// Phase 2K advance the visual pose clock(s) from this frame's speed
+    /// envelope. Purely visual: the authoritative root-motion clock below is
+    /// never derived from these clocks. The active clock drives
+    /// <see cref="ActiveClipName"/>; during a crossfade the outgoing clip keeps
+    /// its own clock and rate.
+    /// </summary>
+    private void AdvancePoseClocks(double deltaSeconds)
+    {
+        _rawVisualPlaybackRate = RawVisualRateFor(ActiveClipName);
+        _visualPlaybackRate = VisualRateFor(ActiveClipName);
+        _poseClock.Advance(deltaSeconds, _visualPlaybackRate, ClipDurationFor(ActiveClipName));
+
+        if (Transition is { } transition && _sourcePoseClock is not null)
+        {
+            var sourceRate = VisualRateFor(transition.SourceClipName);
+            _sourcePoseClock.Advance(deltaSeconds, sourceRate, ClipDurationFor(transition.SourceClipName));
+        }
     }
 
     private void SyncErikaInstance()

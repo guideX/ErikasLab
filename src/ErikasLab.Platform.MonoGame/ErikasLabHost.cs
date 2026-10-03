@@ -28,14 +28,14 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
 
         Content.RootDirectory = "Content";
         IsMouseVisible = false;
-        Window.Title = "Erika's Lab - Phase 2H";
+        Window.Title = "Erika's Lab - Phase 2K";
         Window.AllowUserResizing = true;
         Window.ClientSizeChanged += OnClientSizeChanged;
     }
 
     protected override void Initialize()
     {
-        Console.WriteLine("Erika's Lab | Phase 2H | initializing");
+        Console.WriteLine("Erika's Lab | Phase 2K | initializing");
         Console.WriteLine($"Runtime: {RuntimeInformation.FrameworkDescription} ({RuntimeInformation.ProcessArchitecture})");
         base.Initialize();
     }
@@ -83,6 +83,9 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
         }
 
         Console.WriteLine($"Camera policy: {_gameSession.CameraRig.DescribePolicy()}");
+        Console.WriteLine(
+            "Locomotion playback policy: separate visual pose clock (root motion independent); " +
+            $"rate = speed / authoredSpeed, bounds [{LocomotionPlaybackRates.MinimumRate}, {LocomotionPlaybackRates.MaximumRate}], idle 1x");
         Console.WriteLine("Controls: W/A/S/D move (Shift sprint, camera-relative), mouse or arrow keys orbit, 1/2/3 diagnostic idle/walk/run, Escape exits");
     }
 
@@ -100,7 +103,9 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
         if (_modelRenderer is not null)
         {
             _modelRenderer.ActiveClipName = _gameSession.ActiveClipName;
-            _modelRenderer.ClipStartSeconds = _gameSession.ClipStartSeconds;
+            _modelRenderer.PoseElapsedSeconds = _gameSession.VisualPoseElapsedSeconds;
+            _modelRenderer.SourcePoseElapsedSeconds = _gameSession.TransitionSourcePoseElapsedSeconds;
+            _modelRenderer.DestinationPoseElapsedSeconds = _gameSession.TransitionDestinationPoseElapsedSeconds;
             _modelRenderer.Transition = _gameSession.Transition;
             if (!string.Equals(_gameSession.ActiveClipName, _loggedClip, StringComparison.Ordinal))
             {

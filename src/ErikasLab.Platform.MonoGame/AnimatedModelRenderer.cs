@@ -36,13 +36,13 @@ internal sealed class AnimatedModelRenderer
     }
 
     /// <summary>
-    /// Advances playback. Uses the absolute game clock (not accumulated
-    /// deltas), so long runs cannot drift; looping is exact modulo math.
-    /// The host copies <see cref="GameSession.ActiveClipName"/> /
-    /// <see cref="GameSession.ClipStartSeconds"/> / <see cref="GameSession.Transition"/>
-    /// here each frame. When a transition is in flight both clips are evaluated
-    /// and blended; otherwise the active clip renders alone. Elapsed for any
-    /// clip is Total - its loop origin.
+    /// Advances playback bookkeeping. The absolute game clock (not accumulated
+    /// deltas) is retained only for crossfade blend alpha, which stays
+    /// transition-elapsed based. Pose sample times are supplied explicitly by
+    /// the host from the Phase 2K visual pose clocks, so the renderer never
+    /// integrates gameplay animation timing itself. When a transition is in
+    /// flight both clips are evaluated at their own explicit pose phases and
+    /// blended; otherwise the active clip renders alone.
     /// </summary>
     public void Update(FrameTime frameTime)
     {
@@ -55,8 +55,20 @@ internal sealed class AnimatedModelRenderer
     /// <summary>Active stable clip id (idle_looking_around/walk/run). Set by the host from the session.</summary>
     public string ActiveClipName { get; set; } = ErikaFigure.IdleClipName;
 
-    /// <summary>Absolute game-clock origin of the active clip loop. Set by the host from the session.</summary>
-    public double ClipStartSeconds { get; set; }
+    /// <summary>
+    /// Phase 2K active-clip visual pose phase (seconds) in the clip's loop.
+    /// Owned by <see cref="GameSession.VisualPoseElapsedSeconds"/>; set by the
+    /// host each frame. The renderer samples from this instead of deriving a
+    /// time from the absolute clock, so world-motion timing and visible timing
+    /// stay independent.
+    /// </summary>
+    public double PoseElapsedSeconds { get; set; }
+
+    /// <summary>Phase 2K outgoing-clip visual pose phase during a crossfade. Set by the host.</summary>
+    public double SourcePoseElapsedSeconds { get; set; }
+
+    /// <summary>Phase 2K incoming-clip visual pose phase during a crossfade. Set by the host.</summary>
+    public double DestinationPoseElapsedSeconds { get; set; }
 
     /// <summary>
     /// Phase 2F in-flight crossfade (or null). Set by the host from the session.
@@ -201,7 +213,7 @@ internal sealed class AnimatedModelRenderer
     private void EvaluateSingle(PreparedCharacter prepared)
     {
         var clip = prepared.ClipFor(ActiveClipName);
-        var time = clip.NormalizeTime(prepared.TotalSeconds - ClipStartSeconds);
+        var time = clip.NormalizeTime(PoseElapsedSeconds);
         AnimationEvaluator.EvaluateLocal(prepared.Skeleton!, clip, time, prepared.Local);
 
         if (prepared.HipsBoneIndex >= 0)
@@ -227,13 +239,12 @@ internal sealed class AnimatedModelRenderer
     /// continuous with the single-clip path; neither pose adds a second world
     /// root delta (that stays in <see cref="GameSession"/>).
     /// </summary>
-    private static void EvaluateCrossfade(PreparedCharacter prepared, AnimationTransition transition)
+    private void EvaluateCrossfade(PreparedCharacter prepared, AnimationTransition transition)
     {
         var sourceClip = prepared.ClipFor(transition.SourceClipName);
         var destinationClip = prepared.ClipFor(transition.DestinationClipName);
-        var sourceTime = sourceClip.NormalizeTime(prepared.TotalSeconds - transition.SourceClipStartSeconds);
-        var destinationTime = destinationClip.NormalizeTime(
-            prepared.TotalSeconds - transition.DestinationClipStartSeconds);
+        var sourceTime = sourceClip.NormalizeTime(SourcePoseElapsedSeconds);
+        var destinationTime = destinationClip.NormalizeTime(DestinationPoseElapsedSeconds);
 
         AnimationEvaluator.EvaluateLocalTransforms(
             prepared.Skeleton!, sourceClip, sourceTime,
