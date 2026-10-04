@@ -688,13 +688,23 @@ public sealed class FurnishingCollisionTests
         var session = SessionWithClips();
         var timeline = new Timeline();
 
-        timeline.Step(session, 900, _ => Move(forward: true));
+        // Phase 2P: once blocked, Erika idles against the hearth, so the contact
+        // is captured at first constraint.
+        string? hitName = null;
+        for (var i = 1; i <= 900; i++)
+        {
+            timeline.Step(session, 1, _ => Move(forward: true));
+            if (hitName is null && session.WasPlayerCollisionConstrained)
+            {
+                hitName = session.LastPlayerCollisionName;
+            }
+        }
 
-        Assert.Equal("Hearth", session.LastPlayerCollisionName);
-        Assert.True(session.WasPlayerCollisionConstrained);
+        Assert.Equal("Hearth", hitName);
         Assert.Equal(0f, session.ErikaPosition.X, precision: 3);
         Assert.True(session.ErikaPosition.Z >= HearthFrontZ - 1e-3f);
         Assert.False(IsPenetrating(session.PlayerCollisions, new Vector2(session.ErikaPosition.X, session.ErikaPosition.Z)));
+        Assert.True(session.IsMovementBlocked);
     }
 
     [Fact]
@@ -704,9 +714,19 @@ public sealed class FurnishingCollisionTests
         var timeline = new Timeline();
 
         // Walk down the aisle to the table band, then strafe left into Table.Left.
+        // Phase 2P: the contact is captured at first constraint (after the latch
+        // Erika idles and the last-frame collision clears).
         timeline.Step(session, 330, _ => Move(forward: true));
-        timeline.Step(session, 120, _ => Move(left: true));
-        Assert.Equal("Table.Left", session.LastPlayerCollisionName);
+        string? hitName = null;
+        for (var i = 0; i < 120; i++)
+        {
+            timeline.Step(session, 1, _ => Move(left: true));
+            if (hitName is null && session.WasPlayerCollisionConstrained)
+            {
+                hitName = session.LastPlayerCollisionName;
+            }
+        }
+        Assert.Equal("Table.Left", hitName);
         Assert.True(session.ErikaPosition.X < -0.5f);
 
         // Then forward-left: slide along the table edge and round its rear corner.
@@ -777,14 +797,22 @@ public sealed class FurnishingCollisionTests
         var session = SessionWithClips();
         var timeline = new Timeline();
 
-        timeline.Step(session, 600, _ => Move(forward: true, sprint: true));
-        Assert.Equal("Hearth", session.LastPlayerCollisionName);
+        string? hitName = null;
+        for (var i = 0; i < 600; i++)
+        {
+            timeline.Step(session, 1, _ => Move(forward: true, sprint: true));
+            if (hitName is null && session.WasPlayerCollisionConstrained)
+            {
+                hitName = session.LastPlayerCollisionName;
+            }
+        }
+        Assert.Equal("Hearth", hitName);
 
         for (var i = 0; i < 120; i++)
         {
             timeline.Step(session, 1, _ => Move(forward: true, sprint: true));
 
-            Assert.True(session.WasPlayerCollisionConstrained);
+            Assert.True(session.IsMovementBlocked);
             Assert.True(IsFinite(session.ErikaPosition));
             Assert.True(float.IsFinite(session.ErikaYawRadians));
             Assert.True(float.IsFinite(session.CurrentMoveSpeedMetersPerSecond));
@@ -792,7 +820,7 @@ public sealed class FurnishingCollisionTests
             Assert.True(float.IsFinite(session.RootMotionGain));
             Assert.True(float.IsFinite(session.VisualPlaybackRate));
             Assert.True(IsFinite(session.Camera.Position));
-            Assert.Equal(ErikaFigure.RunClipName, session.ActiveClipName);
+            Assert.Equal(ErikaFigure.IdleClipName, session.ActiveClipName);
         }
 
         Assert.True(session.ErikaPosition.Z >= HearthFrontZ - 1e-3f);
@@ -805,8 +833,16 @@ public sealed class FurnishingCollisionTests
         var timeline = new Timeline();
 
         timeline.Step(session, 330, _ => Move(forward: true));
-        timeline.Step(session, 120, _ => Move(left: true));
-        Assert.Equal("Table.Left", session.LastPlayerCollisionName);
+        string? hitName = null;
+        for (var i = 0; i < 120; i++)
+        {
+            timeline.Step(session, 1, _ => Move(left: true));
+            if (hitName is null && session.WasPlayerCollisionConstrained)
+            {
+                hitName = session.LastPlayerCollisionName;
+            }
+        }
+        Assert.Equal("Table.Left", hitName);
         var xAtTable = session.ErikaPosition.X;
 
         timeline.Step(session, 240, _ => NoInput());

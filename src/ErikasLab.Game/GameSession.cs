@@ -83,6 +83,7 @@ public sealed class GameSession
     private bool _turnInPlaceActive;
     private bool _hasRequestedHeading;
     private float _requestedHeadingRadians;
+    private readonly BlockedMovementTracker _blockedMovement;
 
     public GameSession()
     {
@@ -97,6 +98,13 @@ public sealed class GameSession
         // GameSession constrains the requested root-motion displacement against
         // it. Player collision and camera obstruction are independent sets.
         PlayerCollisions = EnvironmentFactory.CreatePlayerCollisionSet();
+
+        // Phase 2P: the blocked-movement tracker consumes the same static
+        // player-collision set through a short diagnostic probe. It only feeds
+        // back into the locomotion target-speed decision; it never moves Erika.
+        _blockedMovement = new BlockedMovementTracker(
+            PlayerCollisions,
+            PlayerCollisionPolicy.PlayerCollisionRadiusMeters);
 
         // GameSession owns Erika: the environment builds static geometry only and
         // this instance's transform is synced from her authoritative state.
@@ -143,6 +151,17 @@ public sealed class GameSession
     /// <see cref="VisualPlaybackSynchronizationEnabled"/> for Phase 2K.
     /// </summary>
     public bool PlayerCollisionEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Phase 2P blocked-movement-response toggle. True (default) suppresses the
+    /// locomotion target speed to zero while the sustained-blocked latch is
+    /// active; false lets the target speed follow the authored walk/run speed
+    /// regardless of the latch (the Phase 2O behavior). This is a validation
+    /// seam for the clear-space A/B regression test, exactly like
+    /// <see cref="PlayerCollisionEnabled"/>: in clear space the probe never
+    /// latches, so both settings produce identical locomotion.
+    /// </summary>
+    public bool BlockedMovementResponseEnabled { get; set; } = true;
 
     /// <summary>
     /// Phase 2N displacement (meters) the authored root-motion stack requested
@@ -315,6 +334,40 @@ public sealed class GameSession
             : 0f;
 
     /// <summary>
+    /// Phase 2P true while the sustained-blocked-movement latch is active. While
+    /// active, the locomotion target speed is suppressed to zero so the existing
+    /// Phase 2I deceleration envelope slows Erika to idle through the normal
+    /// crossfade path. It never generates translation, never modifies accepted
+    /// displacement, and never adds a second movement authority.
+    /// </summary>
+    public bool IsMovementBlocked => _blockedMovement.IsMovementBlocked;
+
+    /// <summary>
+    /// Phase 2P elapsed seconds since the blocked latch engaged (0 when not
+    /// blocked). Bounded state only; no history is accumulated.
+    /// </summary>
+    public float BlockedMovementSeconds => _blockedMovement.BlockedMovementSeconds;
+
+    /// <summary>
+    /// Phase 2P latest blocked-probe progress ratio in [0, 1], where 1 is
+    /// completely free and 0 is fully blocked. Always finite.
+    /// </summary>
+    public float BlockedMovementProgressRatio => _blockedMovement.BlockedMovementProgressRatio;
+
+    /// <summary>
+    /// Phase 2P current low-progress candidate duration (seconds) toward the
+    /// enter delay; 0 once the latch is engaged.
+    /// </summary>
+    public float BlockedMovementCandidateSeconds => _blockedMovement.BlockedMovementCandidateSeconds;
+
+    /// <summary>
+    /// Phase 2P diagnostic blocked-probe distance (meters), from the
+    /// centralized <see cref="BlockedMovementPolicy"/>.
+    /// </summary>
+    public static float BlockedMovementProbeDistanceMeters =>
+        BlockedMovementPolicy.BlockedMovementProbeDistanceMeters;
+
+    /// <summary>
     /// Provide portable animation data so locomotion can consume authored root
     /// motion. Without this (e.g. Phase 2D diagnostic tests) Update performs
     /// clip selection only and Erika stays in place. The platform host calls
@@ -438,9 +491,23 @@ public sealed class GameSession
         }
         else if (hasMovement)
         {
-            requested = input.Sprint ? ErikaFigure.RunClipName : ErikaFigure.WalkClipName;
             requestedViaDiagnostic = false;
-            targetSpeed = AuthoredSpeedFor(requested);
+            if (BlockedMovementResponseEnabled && _blockedMovement.IsMovementBlocked)
+            {
+                // Phase 2P: sustained inability to make progress suppresses the
+                // locomotion target so the existing Phase 2I deceleration
+                // envelope slows Erika to idle through the normal crossfade
+                // path. The held input remains intent; the blocked probe
+                // prevents reacceleration while the obstruction remains. No
+                // second deceleration curve and no special blocked animation.
+                requested = ErikaFigure.IdleClipName;
+                targetSpeed = 0f;
+            }
+            else
+            {
+                requested = input.Sprint ? ErikaFigure.RunClipName : ErikaFigure.WalkClipName;
+                targetSpeed = AuthoredSpeedFor(requested);
+            }
         }
         else if (diagnostic is not null)
         {
@@ -587,6 +654,11 @@ public sealed class GameSession
         // touches the Phase 2I speed envelope or the Phase 2K playback clock.
         ApplyPlayerCollision(requestedDisplacement);
 
+        // Phase 2P: advance the blocked-movement state from this frame's final
+        // position and smoothed facing. The probe is diagnostic only; it never
+        // moves Erika and never feeds the accepted displacement above.
+        UpdateBlockedMovement(frameTime.DeltaSeconds, hasMovement);
+
         // Phase 2H: follow with the current (post-movement) Erika position so the
         // rendered camera looks exactly at her now; only the camera position
         // trails, never its orientation.
@@ -646,6 +718,33 @@ public sealed class GameSession
         {
             _turnInPlaceActive = false;
         }
+    }
+
+    /// <summary>
+    /// Phase 2P advance the blocked-movement tracker once per frame, after the
+    /// accepted displacement is final. The probe runs only while directional
+    /// movement intent exists and a stationary turn-in-place is not gating
+    /// translation; otherwise the state is cleared (losing intent is ordinary
+    /// Phase 2I deceleration, and a turn-in-place must not read its own lack of
+    /// translation as obstruction). The probe direction is Erika's current
+    /// smoothed facing, so the blocked response tracks the actual root-motion
+    /// direction rather than the camera or raw target yaw.
+    /// </summary>
+    private void UpdateBlockedMovement(double deltaSeconds, bool hasMovement)
+    {
+        if (!PlayerCollisionEnabled || !BlockedMovementResponseEnabled)
+        {
+            _blockedMovement.Clear();
+            return;
+        }
+
+        var probeEnabled = hasMovement && !_turnInPlaceActive;
+        var probeDirection = new Vector2(MathF.Sin(ErikaYawRadians), MathF.Cos(ErikaYawRadians));
+        _blockedMovement.Update(
+            new Vector2(ErikaPosition.X, ErikaPosition.Z),
+            probeDirection,
+            probeEnabled,
+            deltaSeconds);
     }
 
     /// <summary>

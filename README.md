@@ -513,6 +513,54 @@ slide resolver, 4-iteration cap) is reused unchanged; only the blocker set grew.
   collision); furnishings are static obstacles with no interaction behavior;
   no blocked-movement animation response.
 
+## Blocked-movement locomotion response (Phase 2P)
+
+Erika no longer walks or runs indefinitely when a solid obstacle prevents
+meaningful translation. A short diagnostic probe detects sustained lack of
+usable progress and suppresses the locomotion target speed so the existing
+Phase 2I deceleration envelope slows her to idle through the normal crossfade
+path. No second animation or movement system is added.
+
+- Probe: a 0.10 m forward cast from Erika's current position along her smoothed
+  facing, run through the existing `PlayerCollisionResolver` without applying
+  the result. It is diagnostic only — it never moves Erika and never feeds the
+  accepted displacement. The probe runs only while directional movement intent
+  exists and a stationary turn-in-place is not gating translation.
+- Progress metric: `progressRatio = length(acceptedProbeDisplacement) /
+  probeDistance`, clamped to `[0, 1]`. 1.0 is completely free; near 0.0 is
+  fully blocked. Always finite; zero/non-finite probes are safe.
+- Hysteresis: enter blocked at or below 0.15 (only 15% of probe travel
+  survives — motion within ~8.6 degrees of head-on); release at or above 0.30.
+  The gap prevents flicker when hovering near the boundary.
+- Time confirmation: 0.05 s of sustained low progress before the latch
+  engages (ignores one-frame collision noise and corner brushes); 0.02 s of
+  high progress before release. Frame-rate independent (elapsed time).
+- Speed-envelope integration: while the latch is active, the locomotion target
+  speed is suppressed to zero. The existing 24 m/s^2 deceleration slows Erika
+  to the 0.01 m/s stop threshold, then the existing crossfade path enters
+  idle. The held input remains intent; the probe prevents reacceleration while
+  the obstruction remains. No second deceleration curve.
+- Playback: as the speed envelope decelerates, the Phase 2K visual playback
+  rate slows naturally with it. No special blocked animation.
+- Recovery: when the probe reports viable movement (e.g. after redirecting along
+  a wall or rotating the camera), the latch releases and the normal acceleration
+  envelope resumes from the current speed. No speed jump, no root replay.
+- Wall sliding: meaningful tangential movement (shallow/moderate diagonal)
+  keeps a high progress ratio and stays locomotion. Only near-head-on pushes
+  latch blocked.
+- Clear-space no-op: when the probe reports free movement, the blocked response
+  is a no-op — position, yaw, clip, speed, root gain, visual rate, pose clocks,
+  and transitions are identical with the response enabled or disabled
+  (`BlockedMovementResponseEnabled` A/B seam, like `PlayerCollisionEnabled`).
+- Diagnostics: `IsMovementBlocked`, `BlockedMovementSeconds`,
+  `BlockedMovementProgressRatio`, `BlockedMovementCandidateSeconds`,
+  `BlockedMovementProbeDistanceMeters`; the startup `Blocked-movement policy:`
+  line reports the probe distance, thresholds, and delays.
+- Limitations: the probe is a short forward cast, so a very small obstacle
+  approached at a shallow angle can still be slid around (correct behavior —
+  Erika navigates around small trees); the blocked response targets sustained
+  obstruction, not transient corner contact.
+
 ## Deferred work
 
 Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation state machines/blend trees, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. Phase 2F covered short crossfades and turn-rate smoothing; Phase 2G added the third-person follow/orbit camera; Phase 2H made the camera continuously look at Erika and aligned her spawn facing with initial forward movement; Phase 2I added acceleration/deceleration movement response (speed envelope scaling the single authored root-motion authority); Phase 2J added stationary turn-in-place (a gated 45°-enter/15°-release procedural pivot that holds idle and zero translational target until the heading error is resolved, then releases through the existing speed envelope); Phase 2K synchronized the visible locomotion playback rate with the Phase 2I speed envelope through a separate pose clock, bounding the run→walk raw rate at 2×. Phase 2L added the first environment blockout (Viking longhouse in a forest clearing) as static vertex-colored geometry owned by a centralized portable layout. Phase 2M added the static camera-obstruction pass (32 oriented boxes, spherecast pull-in, smooth outward recovery) on the real environment geometry. Phase 2N added static flat-XZ player collision and wall sliding against the longhouse shell and tree trunks (29 blockers, bounded sweep-and-slide), constraining the authored root-motion displacement without a second movement authority. Phase 2O extended that set to the longhouse interior (solid hearth, benches, and tables; 34 blockers total) using the same architecture, and verified the interior stays navigable. With the environment collision set now covering the shell, trees, and furnishings, the most obvious remaining locomotion/collision defect is foot sliding while blocked, so the smallest logical next step is a blocked-movement locomotion response (with camera corner-snapping/character fading as the next environment-polish candidates after that), camera corner-snapping/character fading, stride warping/foot IK to remove the remaining capped run→walk slide, and authored turn-in-place clips. Final textures/models are intentionally deferred.

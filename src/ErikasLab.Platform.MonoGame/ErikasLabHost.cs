@@ -95,6 +95,14 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
             $"skin {PlayerCollisionPolicy.PlayerCollisionSkinMeters:F2} m, " +
             $"slide iterations {PlayerCollisionPolicy.MaxSlideIterations}, flat XZ only (no gravity/jumping)");
         Console.WriteLine(
+            "Blocked-movement policy: diagnostic probe " +
+            $"{BlockedMovementPolicy.BlockedMovementProbeDistanceMeters:F2} m along smoothed facing; " +
+            $"progress ratio enter <= {BlockedMovementPolicy.BlockedEnterProgressRatio:F2} / " +
+            $"release >= {BlockedMovementPolicy.BlockedReleaseProgressRatio:F2}, " +
+            $"enter delay {BlockedMovementPolicy.BlockedEnterDelaySeconds:F2} s / " +
+            $"release delay {BlockedMovementPolicy.BlockedReleaseDelaySeconds:F2} s; " +
+            "sustained block suppresses target speed to 0 (existing 24 m/s^2 deceleration, then idle)");
+        Console.WriteLine(
             "Locomotion playback policy: separate visual pose clock (root motion independent); " +
             $"rate = speed / authoredSpeed, bounds [{LocomotionPlaybackRates.MinimumRate}, {LocomotionPlaybackRates.MaximumRate}], idle 1x");
         Console.WriteLine("Controls: W/A/S/D move (Shift sprint, camera-relative), mouse or arrow keys orbit, 1/2/3 diagnostic idle/walk/run, Escape exits");

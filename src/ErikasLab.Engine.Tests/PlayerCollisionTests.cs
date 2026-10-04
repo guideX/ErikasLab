@@ -623,14 +623,25 @@ public sealed class PlayerCollisionTests
 
         // Phase 2O: walking straight down the central aisle now meets the solid
         // hearth before the rear wall (the hearth is centered on the aisle).
-        timeline.Step(session, 900, _ => Move(forward: true));
+        // Phase 2P: once blocked, the target speed is suppressed and Erika idles
+        // against the hearth, so the contact is captured at first constraint.
+        string? hitName = null;
+        for (var i = 1; i <= 900; i++)
+        {
+            timeline.Step(session, 1, _ => Move(forward: true));
+            if (hitName is null && session.WasPlayerCollisionConstrained)
+            {
+                hitName = session.LastPlayerCollisionName;
+            }
+        }
 
         var hearthFrontZ = LonghouseLayout.HearthCenterZ + LonghouseLayout.HearthLength / 2f;
-        Assert.True(session.WasPlayerCollisionConstrained);
-        Assert.Equal("Hearth", session.LastPlayerCollisionName);
+        Assert.Equal("Hearth", hitName);
         Assert.True(session.ErikaPosition.Z >= hearthFrontZ, $"z={session.ErikaPosition.Z:F3} passed into the hearth");
         Assert.True(session.ErikaPosition.Z <= hearthFrontZ + 0.45f, $"z={session.ErikaPosition.Z:F3} stopped too early");
         Assert.False(IsPenetrating(set, session.ErikaPosition));
+        Assert.True(session.IsMovementBlocked);
+        Assert.Equal(ErikaFigure.IdleClipName, session.ActiveClipName);
     }
 
     [Fact]
@@ -672,17 +683,22 @@ public sealed class PlayerCollisionTests
 
         // Sprint straight down the central aisle into the solid hearth.
         var minZ = float.MaxValue;
+        string? hitName = null;
         for (var i = 0; i < 600; i++)
         {
             timeline.Step(session, 1, _ => Move(forward: true, sprint: true));
             minZ = MathF.Min(minZ, session.ErikaPosition.Z);
+            if (hitName is null && session.WasPlayerCollisionConstrained)
+            {
+                hitName = session.LastPlayerCollisionName;
+            }
         }
 
         var hearthFrontZ = LonghouseLayout.HearthCenterZ + LonghouseLayout.HearthLength / 2f;
         Assert.True(minZ >= hearthFrontZ - 1e-3f, $"tunneled into the hearth: minZ={minZ:F3}");
         Assert.True(session.ErikaPosition.Z >= hearthFrontZ - 1e-3f, $"tunneled into the hearth: z={session.ErikaPosition.Z:F3}");
         Assert.True(session.ErikaPosition.Z <= hearthFrontZ + 0.45f);
-        Assert.Equal("Hearth", session.LastPlayerCollisionName);
+        Assert.Equal("Hearth", hitName);
         Assert.False(IsPenetrating(set, session.ErikaPosition));
     }
 
@@ -698,7 +714,7 @@ public sealed class PlayerCollisionTests
         {
             timeline.Step(session, 1, _ => Move(forward: true, sprint: true));
 
-            Assert.True(session.WasPlayerCollisionConstrained,
+            Assert.True(session.IsMovementBlocked,
                 $"i={i} pos=({session.ErikaPosition.X:F4},{session.ErikaPosition.Z:F4}) req=({session.RequestedPlayerDisplacement.X:F4},{session.RequestedPlayerDisplacement.Z:F4}) speed={session.CurrentMoveSpeedMetersPerSecond:F4} clip={session.ActiveClipName} hits={session.PlayerCollisionHitCount}");
             Assert.True(float.IsFinite(session.CurrentMoveSpeedMetersPerSecond));
             Assert.True(float.IsFinite(session.TargetMoveSpeedMetersPerSecond));
@@ -707,12 +723,13 @@ public sealed class PlayerCollisionTests
             Assert.True(float.IsFinite(session.ErikaYawRadians));
             Assert.True(IsFinite(session.ErikaPosition));
             Assert.True(IsFinite(session.Camera.Position));
-            Assert.Equal(ErikaFigure.RunClipName, session.ActiveClipName);
+            Assert.Equal(ErikaFigure.IdleClipName, session.ActiveClipName);
         }
 
-        // Pushing into a wall must not corrupt the speed envelope: the intent
-        // still requests run speed.
-        Assert.True(session.CurrentMoveSpeedMetersPerSecond > 0f);
+        // Pushing into a wall must not corrupt the speed envelope: the blocked
+        // response suppresses the target to zero and the envelope decays to rest.
+        Assert.Equal(0f, session.CurrentMoveSpeedMetersPerSecond, precision: 5);
+        Assert.Equal(0f, session.TargetMoveSpeedMetersPerSecond, precision: 5);
     }
 
     [Fact]
@@ -722,13 +739,17 @@ public sealed class PlayerCollisionTests
         var timeline = new Timeline();
 
         timeline.Step(session, 600, _ => Move(forward: true, sprint: true));
-        Assert.Equal(ErikaFigure.RunClipName, session.ActiveClipName);
+        // Phase 2P: sustained run into the hearth latches the blocked response, so
+        // Erika decelerates to idle rather than holding the run clip in place.
+        Assert.True(session.IsMovementBlocked);
+        Assert.Equal(ErikaFigure.IdleClipName, session.ActiveClipName);
 
         timeline.Step(session, 240, _ => NoInput());
 
         Assert.Equal(ErikaFigure.IdleClipName, session.ActiveClipName);
         Assert.Equal(0f, session.CurrentMoveSpeedMetersPerSecond, precision: 6);
         Assert.False(session.WasPlayerCollisionConstrained);
+        Assert.False(session.IsMovementBlocked);
     }
 
     [Fact]
