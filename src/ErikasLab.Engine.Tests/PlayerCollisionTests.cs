@@ -383,8 +383,9 @@ public sealed class PlayerCollisionTests
     {
         var set = LonghouseCollisions();
 
-        // 5 shell boxes (2 long walls + rear + 2 front flanking segments) + 24 trunks.
-        Assert.Equal(29, set.Count);
+        // 5 shell boxes (2 long walls + rear + 2 front flanking segments)
+        // + 5 interior furnishings (hearth + 2 benches + 2 tables) + 24 trunks.
+        Assert.Equal(34, set.Count);
     }
 
     [Fact]
@@ -539,7 +540,9 @@ public sealed class PlayerCollisionTests
     {
         var set = LonghouseCollisions();
 
-        var result = Resolve(set, 0, 0, 0, 10);
+        // Start in the clear central aisle (0, 2) and walk back out the door;
+        // the hearth now occupies the old (0, 0) origin point.
+        var result = Resolve(set, 0, 2, 0, 10);
 
         Assert.False(result.Constrained);
         Assert.Equal(10f, result.Delta.Y, precision: 5);
@@ -612,34 +615,39 @@ public sealed class PlayerCollisionTests
     }
 
     [Fact]
-    public void WalkForwardStopsAtRearWall()
+    public void WalkForwardStopsAtHearth()
     {
         var session = SessionWithClips();
         var set = session.PlayerCollisions;
         var timeline = new Timeline();
 
+        // Phase 2O: walking straight down the central aisle now meets the solid
+        // hearth before the rear wall (the hearth is centered on the aisle).
         timeline.Step(session, 900, _ => Move(forward: true));
 
+        var hearthFrontZ = LonghouseLayout.HearthCenterZ + LonghouseLayout.HearthLength / 2f;
         Assert.True(session.WasPlayerCollisionConstrained);
-        Assert.Equal("Wall.Rear", session.LastPlayerCollisionName);
-        Assert.True(session.ErikaPosition.Z >= LonghouseLayout.RearZ, $"z={session.ErikaPosition.Z:F3} passed the rear wall");
-        Assert.True(session.ErikaPosition.Z <= LonghouseLayout.RearZ + 0.45f, $"z={session.ErikaPosition.Z:F3} stopped too early");
+        Assert.Equal("Hearth", session.LastPlayerCollisionName);
+        Assert.True(session.ErikaPosition.Z >= hearthFrontZ, $"z={session.ErikaPosition.Z:F3} passed into the hearth");
+        Assert.True(session.ErikaPosition.Z <= hearthFrontZ + 0.45f, $"z={session.ErikaPosition.Z:F3} stopped too early");
         Assert.False(IsPenetrating(set, session.ErikaPosition));
     }
 
     [Fact]
-    public void WalkDiagonallySlidesAlongLeftWall()
+    public void WalkDiagonallySlidesAlongLeftBench()
     {
         var session = SessionWithClips();
         var set = session.PlayerCollisions;
         var timeline = new Timeline();
 
-        // Enter the interior straight through the door.
+        // Enter the interior straight through the door and up to the hearth.
         timeline.Step(session, 400, _ => Move(forward: true));
         var zBefore = session.ErikaPosition.Z;
 
-        // Then push forward-left into the left long wall: the inward component
-        // is removed and Erika keeps sliding toward the rear.
+        // Then push forward-left: Erika slides along the hearth front, rounds its
+        // left corner, and continues down the left side until the long bench
+        // blocks her. The inward component is removed and she keeps sliding
+        // toward the rear along the bench (Phase 2N slide behavior reused).
         var minX = float.MaxValue;
         for (var i = 1; i <= 400; i++)
         {
@@ -648,18 +656,21 @@ public sealed class PlayerCollisionTests
             minX = MathF.Min(minX, session.ErikaPosition.X);
         }
 
-        Assert.True(session.ErikaPosition.Z < zBefore, "Erika did not slide along the wall");
-        Assert.True(minX > -2.7f, $"penetrated the left wall (minX={minX:F3})");
-        Assert.True(minX < -2.4f, $"did not reach the left wall (minX={minX:F3})");
+        var benchInnerX = -LonghouseLayout.BenchCenterX + LonghouseLayout.BenchDepth / 2f;
+        var expectedMinX = benchInnerX + Radius + Skin;
+        Assert.True(session.ErikaPosition.Z < zBefore, "Erika did not slide past the hearth");
+        Assert.True(minX > benchInnerX, $"penetrated the left bench surface (minX={minX:F3})");
+        Assert.True(MathF.Abs(minX - expectedMinX) < 0.05f, $"did not settle against the left bench (minX={minX:F3}, expected~{expectedMinX:F3})");
     }
 
     [Fact]
-    public void RunTowardWallDoesNotTunnelOrPenetrate()
+    public void RunTowardHearthDoesNotTunnelOrPenetrate()
     {
         var session = SessionWithClips();
         var set = session.PlayerCollisions;
         var timeline = new Timeline();
 
+        // Sprint straight down the central aisle into the solid hearth.
         var minZ = float.MaxValue;
         for (var i = 0; i < 600; i++)
         {
@@ -667,9 +678,11 @@ public sealed class PlayerCollisionTests
             minZ = MathF.Min(minZ, session.ErikaPosition.Z);
         }
 
-        Assert.True(minZ >= LonghouseLayout.RearZ - 1e-3f, $"tunneled past rear wall: minZ={minZ:F3}");
-        Assert.True(session.ErikaPosition.Z >= LonghouseLayout.RearZ - 1e-3f, $"tunneled past rear wall: z={session.ErikaPosition.Z:F3}");
-        Assert.True(session.ErikaPosition.Z <= LonghouseLayout.RearZ + 0.45f);
+        var hearthFrontZ = LonghouseLayout.HearthCenterZ + LonghouseLayout.HearthLength / 2f;
+        Assert.True(minZ >= hearthFrontZ - 1e-3f, $"tunneled into the hearth: minZ={minZ:F3}");
+        Assert.True(session.ErikaPosition.Z >= hearthFrontZ - 1e-3f, $"tunneled into the hearth: z={session.ErikaPosition.Z:F3}");
+        Assert.True(session.ErikaPosition.Z <= hearthFrontZ + 0.45f);
+        Assert.Equal("Hearth", session.LastPlayerCollisionName);
         Assert.False(IsPenetrating(set, session.ErikaPosition));
     }
 
@@ -797,11 +810,14 @@ public sealed class PlayerCollisionTests
         }
     }
 
+    // Phase 2O: these A/B routes are deliberately short enough to stay clear of
+    // the interior furnishings (the hearth is ~11.2 m down the aisle from spawn),
+    // so the only difference between the two sessions is the collision toggle.
     [Fact]
     public void ClearSpaceWalkIsIdenticalWithAndWithoutPlayerCollision()
     {
         var (enabled, disabled) = SessionPair();
-        RunIdentical(enabled, disabled, 400, _ => Move(forward: true));
+        RunIdentical(enabled, disabled, 300, _ => Move(forward: true));
         Assert.False(enabled.WasPlayerCollisionConstrained);
     }
 
@@ -809,7 +825,7 @@ public sealed class PlayerCollisionTests
     public void ClearSpaceRunIsIdenticalWithAndWithoutPlayerCollision()
     {
         var (enabled, disabled) = SessionPair();
-        RunIdentical(enabled, disabled, 150, _ => Move(forward: true, sprint: true));
+        RunIdentical(enabled, disabled, 40, _ => Move(forward: true, sprint: true));
         Assert.False(enabled.WasPlayerCollisionConstrained);
     }
 
@@ -817,9 +833,9 @@ public sealed class PlayerCollisionTests
     public void ClearSpaceWalkToRunAndStopIsIdenticalWithAndWithoutPlayerCollision()
     {
         var (enabled, disabled) = SessionPair();
-        RunIdentical(enabled, disabled, 100, _ => Move(forward: true));
-        RunIdentical(enabled, disabled, 100, _ => Move(forward: true, sprint: true));
-        RunIdentical(enabled, disabled, 120, _ => NoInput());
+        RunIdentical(enabled, disabled, 40, _ => Move(forward: true));
+        RunIdentical(enabled, disabled, 40, _ => Move(forward: true, sprint: true));
+        RunIdentical(enabled, disabled, 60, _ => NoInput());
         Assert.False(enabled.WasPlayerCollisionConstrained);
     }
 
@@ -845,8 +861,10 @@ public sealed class PlayerCollisionTests
         {
             var dt = 1f / fps;
             // 40 m/s: at 30 Hz a step is 1.33 m, far enough to jump the
-            // ~0.85 m expanded wall if the sweep were not continuous.
-            var position = new Vector2(0f, LonghouseLayout.SpawnPosition.Z);
+            // ~0.85 m expanded wall if the sweep were not continuous. Start
+            // behind the hearth (z = -5) so the straight run to the rear wall is
+            // clear of interior furnishings.
+            var position = new Vector2(0f, -5f);
             for (var i = 0; i < fps * 4; i++)
             {
                 var result = PlayerCollisionResolver.Resolve(set, position, new Vector2(0f, -40f * dt), Radius);
@@ -882,7 +900,12 @@ public sealed class PlayerCollisionTests
             {
                 var result = PlayerCollisionResolver.Resolve(set, position, new Vector2(0f, -40f * dt), Radius);
                 position = result.Position;
-                if (position.Y > 0f)
+
+                // Only the run from the door plane down to just in front of the
+                // hearth must be unconstrained; past that the solid hearth is
+                // expected to stop her.
+                const float clearOfHearthZ = 1f;
+                if (position.Y > clearOfHearthZ)
                 {
                     constrained |= result.Constrained;
                 }
@@ -899,7 +922,7 @@ public sealed class PlayerCollisionTests
     }
 
     [Fact]
-    public void GameplayWallStopIsFrameRateIndependent()
+    public void GameplayHearthStopIsFrameRateIndependent()
     {
         var results = new (int Fps, float Z)[3];
         var r = 0;
@@ -921,7 +944,7 @@ public sealed class PlayerCollisionTests
         {
             Assert.True(
                 MathF.Abs(results[0].Z - results[i].Z) < 0.02f,
-                $"final wall position diverged between {results[0].Fps} and {results[i].Fps} Hz: {results[0].Z:F4} vs {results[i].Z:F4}");
+                $"final hearth position diverged between {results[0].Fps} and {results[i].Fps} Hz: {results[0].Z:F4} vs {results[i].Z:F4}");
         }
     }
 

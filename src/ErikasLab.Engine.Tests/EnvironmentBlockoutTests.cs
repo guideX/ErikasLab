@@ -95,11 +95,11 @@ public sealed class EnvironmentBlockoutTests
     [Fact]
     public void BenchesAndTablesLieInsideFootprint()
     {
-        var benchX = LonghouseLayout.HalfWidth - LonghouseLayout.BenchInset - LonghouseLayout.BenchDepth / 2f;
+        var benchX = LonghouseLayout.BenchCenterX;
         Assert.True(benchX + LonghouseLayout.BenchDepth / 2f <= LonghouseLayout.HalfWidth);
         Assert.True(LonghouseLayout.BenchLength / 2f <= LonghouseLayout.HalfLength);
-        Assert.True(1.65f + LonghouseLayout.TableWidth / 2f <= LonghouseLayout.HalfWidth);
-        Assert.True(3f + LonghouseLayout.TableLength / 2f <= LonghouseLayout.HalfLength);
+        Assert.True(LonghouseLayout.TableCenterX + LonghouseLayout.TableWidth / 2f <= LonghouseLayout.HalfWidth);
+        Assert.True(LonghouseLayout.TableCenterZ + LonghouseLayout.TableLength / 2f <= LonghouseLayout.HalfLength);
     }
 
     // --- spawn -----------------------------------------------------------

@@ -215,6 +215,8 @@ Phase 2M adds: a small static third-person camera-obstruction system on top of t
 
 Phase 2N adds: a small static player-collision system on top of the Phase 2E-2K root-motion locomotion, so Erika can no longer walk or run through the longhouse shell or the tree trunks. A portable `PlayerCollisionSet` (Engine) holds 29 flat-XZ oriented boxes (`PlayerCollisionBox`: center, half extents, yaw) built once by `EnvironmentFactory` from the same authoritative `LonghouseLayout` as the rendered geometry: the two long walls, the rear wall, the two front doorway flanking segments, and the 24 tree trunks. This is deliberately a different set from the Phase 2M camera obstructions — the pitched roof, doorway lintel, gables, rafters, and interior masses are excluded because the player is a horizontal circle at foot level and there is no vertical collision. `GameSession` constrains only the displacement the authored root-motion stack already requested: the requested world XZ delta is passed to the portable `PlayerCollisionResolver`, which returns the accepted delta, and Erika's Y and yaw are untouched, so collision is a constraint and never a second movement authority. The resolver first depenetrates an already-overlapping center (bounded iterations and a 1.0 m correction cap, deterministic tie-breaking), then runs a bounded sweep-and-slide: each static box is Minkowski-expanded by the 0.30 m player radius and the player-center segment is tested against it in the box's local space (slab method), the earliest hit wins, the center moves to the safe contact (minus a 0.01 m skin), and the inward normal component is removed while the tangential remainder continues. A head-on run stops at the wall with no invented sideways motion, a shallow hit slides along the wall, and a corner resolves in a bounded 4 iterations with no bounce, restitution, or friction. The genuine 1.2 m doorway stays open: the 0.30 m radius leaves a 0.60 m usable center corridor, and the flanking segments alone define the jambs (no invisible collider spans the opening). High run speed cannot tunnel because the sweep is continuous, and the resolver is frame-rate independent (30/60/144 Hz all stop at the same position). Blocked movement does not touch the Phase 2I speed envelope or the Phase 2K playback clock — movement intent and animation continue while physical translation is constrained, so pushing against a wall produces foot sliding, which is an acknowledged Phase 2N limitation. Turn-in-place (Phase 2J) still gates translation to exactly zero, and Phase 2M camera obstruction is completely independent (separate set, separate position). Unobstructed locomotion is bit-identical with player collision enabled or disabled (A/B tested). Furnishings/hearth are intentionally still non-solid.
 
+Phase 2O adds: interior-furnishing collision on top of the Phase 2N system, making the Phase 2L hearth, both long benches, and both tables solid without changing the collision architecture. `EnvironmentFactory.CreatePlayerCollisionSet` now appends five flat-XZ `PlayerCollisionBox` blockers derived from the same `LonghouseLayout` values the rendered geometry uses (the hearth as one box over its full 1.4 m x 4.0 m stone footprint centered at z = -1.5, each bench over its 0.5 m x 14 m seat footprint at x = +/-2.4, and each table over its 0.8 m x 3.5 m tabletop projection at x = +/-1.65, z = 3.0), for 34 player blockers total (5 shell + 5 furnishings + 24 trunks). Table center X/Z and bench center X are now shared layout values rather than renderer-only literals, so collision and rendering cannot drift. The hearth is a single solid box (Erika walks around the fire bed, never over it); tables use the tabletop projection with no individual legs, so walking underneath is not allowed. The 0.30 m radius and 0.01 m skin are unchanged, and no new collider type, broadphase, or resolver behavior was added. The interior stays navigable: the genuine doorway, the central aisle between the tables, and both lateral hearth bypasses remain clear (effective widths 0.60 m, 1.90 m, and 0.85 m after player-radius expansion), with the narrowest intended route being the ~0.33 m diagonal weave between the hearth's front corner and the table's rear-inner corner. The 0.10 m bench/table gap and the 0.55 m table/hearth vertical gap are intentionally impassable. Camera obstruction is untouched (still 32 boxes; furnishings are not camera colliders). Clear-space locomotion is bit-identical with collision enabled or disabled, and high-speed sweeps cannot tunnel through any furnishing.
+
 Meshes are generated in code for the proof scene, and canonical Erika arrives through the content pipeline described below, so no manual asset authoring is required yet.
 
 ## Erika content (Phase 2B)
@@ -471,14 +473,49 @@ collision responsibility and the camera rig never consumes it.
   `LastPlayerCollisionName`; the startup `Player collision policy:` line
   reports the blocker count/radius/skin/iterations.
 - Limitations: flat XZ only (no gravity, jumping, slopes, or step-up);
-  furnishings, benches, tables, and the hearth are not solid yet; pushing into
-  a wall while input continues produces foot sliding (movement intent and
-  animation continue while translation is constrained); no blocked-movement
-  animation response.
+  furnishings, benches, tables, and the hearth were not solid in 2N (they are
+  made solid in Phase 2O below); pushing into a wall while input continues
+  produces foot sliding (movement intent and animation continue while
+  translation is constrained); no blocked-movement animation response.
+
+## Player collision — interior furnishings (Phase 2O)
+
+The Phase 2N collision set is extended to the longhouse interior. The collision
+architecture (circle, skin, Minkowski sweep, bounded depenetration, sweep-and-
+slide resolver, 4-iteration cap) is reused unchanged; only the blocker set grew.
+
+- Representation: 34 static flat-XZ oriented boxes (`PlayerCollisionBox`) —
+  the Phase 2N 29 (5 shell walls + 24 tree trunks) plus the central hearth, both
+  long benches, and both tables. Built once by `EnvironmentFactory` from the
+  same authoritative `LonghouseLayout` dimensions as the rendered geometry; the
+  table center X/Z and bench center X are shared layout values, not
+  renderer-only literals.
+- Hearth: one solid box over the full 1.4 m x 4.0 m stone footprint centered at
+  `(0, -1.5)`. Erika walks around the fire bed, never across it. No fire/damage/
+  heat/interaction gameplay.
+- Benches: the full 0.5 m (deep) x 14 m (long) seat footprint at `x = +/-2.4`.
+  Tables: the 0.8 m x 3.5 m tabletop projection at `x = +/-1.65`, `z = 3.0`
+  (no individual legs; walking underneath is not allowed). All yaw 0.
+- Navigability (after 0.30 m radius expansion): doorway 0.60 m, central table
+  aisle 1.90 m, each hearth bypass 0.85 m. The narrowest intended route is the
+  ~0.33 m diagonal between the hearth front corner and the table rear-inner
+  corner. The 0.10 m bench/table gap and the 0.55 m table/hearth vertical gap
+  are intentionally impassable; collision was not shrunk to open every visual
+  gap, and the 0.30 m radius was not changed.
+- Behavior: head-on stops at contact with no sideways motion; diagonal contact
+  slides tangentially; corners stay bounded and deterministic; a 40 m/s sweep
+  cannot tunnel; a starting overlap is depenetrated (bounded, finite).
+- Independence: camera obstruction is untouched (still 32 boxes; the low
+  furnishings are not camera colliders). Root motion, speed envelope, pose
+  playback, turn-in-place, and clear-space locomotion are unchanged; blocked
+  movement still produces foot sliding.
+- Limitations: flat XZ only (no gravity, jumping, slopes, step-up, or vertical
+  collision); furnishings are static obstacles with no interaction behavior;
+  no blocked-movement animation response.
 
 ## Deferred work
 
-Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation state machines/blend trees, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. Phase 2F covered short crossfades and turn-rate smoothing; Phase 2G added the third-person follow/orbit camera; Phase 2H made the camera continuously look at Erika and aligned her spawn facing with initial forward movement; Phase 2I added acceleration/deceleration movement response (speed envelope scaling the single authored root-motion authority); Phase 2J added stationary turn-in-place (a gated 45°-enter/15°-release procedural pivot that holds idle and zero translational target until the heading error is resolved, then releases through the existing speed envelope); Phase 2K synchronized the visible locomotion playback rate with the Phase 2I speed envelope through a separate pose clock, bounding the run→walk raw rate at 2×. Phase 2L added the first environment blockout (Viking longhouse in a forest clearing) as static vertex-colored geometry owned by a centralized portable layout. Phase 2M added the static camera-obstruction pass (32 oriented boxes, spherecast pull-in, smooth outward recovery) on the real environment geometry. Phase 2N added static flat-XZ player collision and wall sliding against the longhouse shell and tree trunks (29 blockers, bounded sweep-and-slide), constraining the authored root-motion displacement without a second movement authority. With the building boundary now solid, the smallest logical next steps are expanding collision to the furnishings/hearth (and deciding whether trees/forest need more), a blocked-movement locomotion response, camera corner-snapping/character fading, stride warping/foot IK to remove the remaining capped run→walk slide, and authored turn-in-place clips. Final textures/models are intentionally deferred.
+Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation state machines/blend trees, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. Phase 2F covered short crossfades and turn-rate smoothing; Phase 2G added the third-person follow/orbit camera; Phase 2H made the camera continuously look at Erika and aligned her spawn facing with initial forward movement; Phase 2I added acceleration/deceleration movement response (speed envelope scaling the single authored root-motion authority); Phase 2J added stationary turn-in-place (a gated 45°-enter/15°-release procedural pivot that holds idle and zero translational target until the heading error is resolved, then releases through the existing speed envelope); Phase 2K synchronized the visible locomotion playback rate with the Phase 2I speed envelope through a separate pose clock, bounding the run→walk raw rate at 2×. Phase 2L added the first environment blockout (Viking longhouse in a forest clearing) as static vertex-colored geometry owned by a centralized portable layout. Phase 2M added the static camera-obstruction pass (32 oriented boxes, spherecast pull-in, smooth outward recovery) on the real environment geometry. Phase 2N added static flat-XZ player collision and wall sliding against the longhouse shell and tree trunks (29 blockers, bounded sweep-and-slide), constraining the authored root-motion displacement without a second movement authority. Phase 2O extended that set to the longhouse interior (solid hearth, benches, and tables; 34 blockers total) using the same architecture, and verified the interior stays navigable. With the environment collision set now covering the shell, trees, and furnishings, the most obvious remaining locomotion/collision defect is foot sliding while blocked, so the smallest logical next step is a blocked-movement locomotion response (with camera corner-snapping/character fading as the next environment-polish candidates after that), camera corner-snapping/character fading, stride warping/foot IK to remove the remaining capped run→walk slide, and authored turn-in-place clips. Final textures/models are intentionally deferred.
 
 ## Repository hygiene
 

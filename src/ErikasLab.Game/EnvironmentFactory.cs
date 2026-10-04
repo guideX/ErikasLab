@@ -162,9 +162,13 @@ public static class EnvironmentFactory
     /// <see cref="LonghouseLayout"/> dimensions as the rendered geometry.
     ///
     /// Included: the two long walls, the rear wall, the two front doorway
-    /// flanking segments (leaving the genuine 1.2 m doorway open), and the 24
-    /// tree trunks. Furnishings/hearth are intentionally not solid yet, and
-    /// there is no vertical collision.
+    /// flanking segments (leaving the genuine 1.2 m doorway open), the central
+    /// hearth, both long benches, both tables, and the 24 tree trunks. Phase 2O
+    /// makes the interior furnishings solid using their rendered XZ footprints
+    /// (the hearth as one box, each table by its tabletop projection with no
+    /// individual legs). There is still no vertical collision: the player is a
+    /// flat-XZ circle, so low obstacles and the doorway lintel are represented
+    /// only by their foot-level footprint.
     /// </summary>
     public static PlayerCollisionSet CreatePlayerCollisionSet()
     {
@@ -207,6 +211,28 @@ public static class EnvironmentFactory
             new Vector2(segmentCenterX, frontZ),
             new Vector2(segmentWidth / 2f, halfThickness),
             0f));
+
+        // Phase 2O interior furnishings. Each blocker mirrors the rendered XZ
+        // footprint from the same LonghouseLayout values the geometry uses, so
+        // collision and rendering cannot drift. The hearth is one solid box over
+        // its full stone footprint (Erika walks around the fire bed, never over
+        // it); benches use their full seat footprint; tables use the tabletop
+        // projection (no individual legs, and walking underneath is not allowed).
+        boxes.Add(new PlayerCollisionBox(
+            "Hearth",
+            new Vector2(LonghouseLayout.Origin.X, LonghouseLayout.HearthCenterZ),
+            new Vector2(LonghouseLayout.HearthWidth / 2f, LonghouseLayout.HearthLength / 2f),
+            0f));
+
+        var benchX = LonghouseLayout.BenchCenterX;
+        var benchHalf = new Vector2(LonghouseLayout.BenchDepth / 2f, LonghouseLayout.BenchLength / 2f);
+        boxes.Add(new PlayerCollisionBox("Bench.Left", new Vector2(-benchX, 0f), benchHalf, 0f));
+        boxes.Add(new PlayerCollisionBox("Bench.Right", new Vector2(benchX, 0f), benchHalf, 0f));
+
+        var tableX = LonghouseLayout.TableCenterX;
+        var tableHalf = new Vector2(LonghouseLayout.TableWidth / 2f, LonghouseLayout.TableLength / 2f);
+        boxes.Add(new PlayerCollisionBox("Table.Left", new Vector2(-tableX, LonghouseLayout.TableCenterZ), tableHalf, 0f));
+        boxes.Add(new PlayerCollisionBox("Table.Right", new Vector2(tableX, LonghouseLayout.TableCenterZ), tableHalf, 0f));
 
         // Tree trunks (canopies are far above the player and not blockers).
         for (var i = 0; i < LonghouseLayout.TreeCount; i++)
@@ -362,7 +388,7 @@ public static class EnvironmentFactory
 
     private static void AddFurnishings(Scene scene, MeshData furniture)
     {
-        var benchX = LonghouseLayout.HalfWidth - LonghouseLayout.BenchInset - LonghouseLayout.BenchDepth / 2f;
+        var benchX = LonghouseLayout.BenchCenterX;
         var benchY = LonghouseLayout.BenchHeight / 2f;
         var benchSize = new Vector3(LonghouseLayout.BenchDepth, LonghouseLayout.BenchHeight, LonghouseLayout.BenchLength);
         AddBox(scene, "Bench.Left", furniture, new Vector3(-benchX, benchY, 0f), benchSize);
@@ -370,9 +396,10 @@ public static class EnvironmentFactory
 
         var tableY = LonghouseLayout.TableHeight / 2f;
         var tableSize = new Vector3(LonghouseLayout.TableWidth, LonghouseLayout.TableHeight, LonghouseLayout.TableLength);
-        var tableZ = 3f;
-        AddBox(scene, "Table.Right", furniture, new Vector3(1.65f, tableY, tableZ), tableSize);
-        AddBox(scene, "Table.Left", furniture, new Vector3(-1.65f, tableY, tableZ), tableSize);
+        var tableX = LonghouseLayout.TableCenterX;
+        var tableZ = LonghouseLayout.TableCenterZ;
+        AddBox(scene, "Table.Right", furniture, new Vector3(tableX, tableY, tableZ), tableSize);
+        AddBox(scene, "Table.Left", furniture, new Vector3(-tableX, tableY, tableZ), tableSize);
     }
 
     private static void AddDoorFrame(Scene scene, MeshData timber)

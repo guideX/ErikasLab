@@ -125,6 +125,19 @@ public static class LonghouseLayout
     /// <summary>Table length along the longhouse axis (meters).</summary>
     public const float TableLength = 3.5f;
 
+    /// <summary>
+    /// Table center offset from the longhouse axis (meters). The two tables are
+    /// mirror images at <c>+/- TableCenterX</c>; the renderer and the Phase 2O
+    /// player-collision set both derive from this single value.
+    /// </summary>
+    public const float TableCenterX = 1.65f;
+
+    /// <summary>
+    /// Table center Z (meters). Both tables sit at the same Z, between the front
+    /// doorway and the hearth, leaving a central aisle between them.
+    /// </summary>
+    public const float TableCenterZ = 3f;
+
     // --- ground / clearing / forest --------------------------------------
 
     /// <summary>Dark forest-floor plane size (meters).</summary>
@@ -180,6 +193,14 @@ public static class LonghouseLayout
 
     /// <summary>Y of a roof slab's centerline (midway between eave and ridge).</summary>
     public static float RoofSlabCenterY => WallHeight + RoofRise / 2f;
+
+    /// <summary>
+    /// Bench center X offset from the longhouse axis (meters), derived from the
+    /// wall line, the wall-to-bench inset, and the bench depth. The two benches
+    /// are mirror images at <c>+/- BenchCenterX</c>; rendering and collision
+    /// share this derivation.
+    /// </summary>
+    public static float BenchCenterX => HalfWidth - BenchInset - BenchDepth / 2f;
 
     /// <summary>Number of repeated side/interior posts along one long wall.</summary>
     public static int SidePostCount => (int)(Length / PostSpacing);
