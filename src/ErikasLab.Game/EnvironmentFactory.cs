@@ -153,6 +153,77 @@ public static class EnvironmentFactory
         return new CameraObstructionSet(boxes.ToArray());
     }
 
+    /// <summary>
+    /// Phase 2N static player-collision set for the Phase 2L environment. This
+    /// is deliberately a *different* set from the camera obstructions: it holds
+    /// only the flat-XZ blockers that define navigable space at foot level, so
+    /// the pitched roof, doorway lintel, gables, rafters, and interior masses
+    /// are excluded. Built once from the same authoritative
+    /// <see cref="LonghouseLayout"/> dimensions as the rendered geometry.
+    ///
+    /// Included: the two long walls, the rear wall, the two front doorway
+    /// flanking segments (leaving the genuine 1.2 m doorway open), and the 24
+    /// tree trunks. Furnishings/hearth are intentionally not solid yet, and
+    /// there is no vertical collision.
+    /// </summary>
+    public static PlayerCollisionSet CreatePlayerCollisionSet()
+    {
+        var boxes = new List<PlayerCollisionBox>();
+
+        var halfWidth = LonghouseLayout.HalfWidth;
+        var halfThickness = LonghouseLayout.WallThickness / 2f;
+
+        boxes.Add(new PlayerCollisionBox(
+            "Wall.Left",
+            new Vector2(-halfWidth, LonghouseLayout.Origin.Z),
+            new Vector2(halfThickness, LonghouseLayout.HalfLength),
+            0f));
+        boxes.Add(new PlayerCollisionBox(
+            "Wall.Right",
+            new Vector2(halfWidth, LonghouseLayout.Origin.Z),
+            new Vector2(halfThickness, LonghouseLayout.HalfLength),
+            0f));
+        boxes.Add(new PlayerCollisionBox(
+            "Wall.Rear",
+            new Vector2(LonghouseLayout.Origin.X, LonghouseLayout.RearZ),
+            new Vector2(halfWidth, halfThickness),
+            0f));
+
+        // Front end wall: two flanking segments only. The doorway gap itself
+        // has no blocker, so the opening is genuinely traversable; there is no
+        // lintel because the player is a flat-XZ circle and the door header is
+        // above her head.
+        var doorHalf = LonghouseLayout.DoorWidth / 2f;
+        var segmentWidth = halfWidth - doorHalf;
+        var segmentCenterX = doorHalf + segmentWidth / 2f;
+        var frontZ = LonghouseLayout.FrontZ;
+        boxes.Add(new PlayerCollisionBox(
+            "Wall.Front.Left",
+            new Vector2(-segmentCenterX, frontZ),
+            new Vector2(segmentWidth / 2f, halfThickness),
+            0f));
+        boxes.Add(new PlayerCollisionBox(
+            "Wall.Front.Right",
+            new Vector2(segmentCenterX, frontZ),
+            new Vector2(segmentWidth / 2f, halfThickness),
+            0f));
+
+        // Tree trunks (canopies are far above the player and not blockers).
+        for (var i = 0; i < LonghouseLayout.TreeCount; i++)
+        {
+            var position = LonghouseLayout.TreePosition(i);
+            var scale = LonghouseLayout.TreeScale(i);
+            var trunkHalf = LonghouseLayout.TreeTrunkWidth * scale / 2f;
+            boxes.Add(new PlayerCollisionBox(
+                $"Tree.{i:00}.Trunk",
+                new Vector2(position.X, position.Z),
+                new Vector2(trunkHalf, trunkHalf),
+                LonghouseLayout.TreeYawRadians(i)));
+        }
+
+        return new PlayerCollisionSet(boxes.ToArray());
+    }
+
     private static void AddGrounds(Scene scene, MeshData forestGround, MeshData clearing, MeshData floor)
     {
         scene.Add(new SceneObject(

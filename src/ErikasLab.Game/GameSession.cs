@@ -93,6 +93,11 @@ public sealed class GameSession
         CameraObstructions = EnvironmentFactory.CreateCameraObstructions();
         _thirdPersonCamera.Obstructions = CameraObstructions;
 
+        // Phase 2N: the environment also owns the flat-XZ player-collision set;
+        // GameSession constrains the requested root-motion displacement against
+        // it. Player collision and camera obstruction are independent sets.
+        PlayerCollisions = EnvironmentFactory.CreatePlayerCollisionSet();
+
         // GameSession owns Erika: the environment builds static geometry only and
         // this instance's transform is synced from her authoritative state.
         World.AddModel(ErikaFigure.CreateInstance());
@@ -120,6 +125,45 @@ public sealed class GameSession
     /// against these boxes; player movement is never affected.
     /// </summary>
     public CameraObstructionSet CameraObstructions { get; }
+
+    /// <summary>
+    /// Phase 2N static player-collision set owned by the environment and
+    /// consumed by the sweep-and-slide resolver. Distinct from
+    /// <see cref="CameraObstructions"/> (which also contains roof/lintel
+    /// geometry irrelevant to the player's feet) and never shared with the
+    /// camera rig.
+    /// </summary>
+    public PlayerCollisionSet PlayerCollisions { get; }
+
+    /// <summary>
+    /// Phase 2N player-collision toggle. True (default) constrains the
+    /// root-motion-requested displacement against <see cref="PlayerCollisions"/>;
+    /// false applies the Phase 2M displacement verbatim. This is a validation
+    /// seam for the clear-space A/B regression test, exactly like
+    /// <see cref="VisualPlaybackSynchronizationEnabled"/> for Phase 2K.
+    /// </summary>
+    public bool PlayerCollisionEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Phase 2N displacement (meters) the authored root-motion stack requested
+    /// this frame before environmental constraint. Y is always 0 (flat XZ).
+    /// </summary>
+    public Vector3 RequestedPlayerDisplacement { get; private set; }
+
+    /// <summary>
+    /// Phase 2N displacement (meters) accepted after collision constraint.
+    /// Equals <see cref="RequestedPlayerDisplacement"/> when nothing is hit.
+    /// </summary>
+    public Vector3 AcceptedPlayerDisplacement { get; private set; }
+
+    /// <summary>Phase 2N true when collision removed or corrected any requested displacement this frame.</summary>
+    public bool WasPlayerCollisionConstrained { get; private set; }
+
+    /// <summary>Phase 2N number of sweep contacts resolved this frame.</summary>
+    public int PlayerCollisionHitCount { get; private set; }
+
+    /// <summary>Phase 2N name of the last blocker contacted this frame, or null.</summary>
+    public string? LastPlayerCollisionName { get; private set; }
 
     public CameraState Camera { get; }
 
@@ -507,6 +551,7 @@ public sealed class GameSession
         // in, stops ramp out, and walk<->run keep world speed continuous while
         // the path and direction still come entirely from the animation.
         _rootMotionGain = 0f;
+        var requestedDisplacement = Vector3.Zero;
         if (HasRootMotionData() && IsLocomotionClip(ActiveClipName))
         {
             var isRun = string.Equals(ActiveClipName, ErikaFigure.RunClipName, StringComparison.Ordinal);
@@ -530,11 +575,17 @@ public sealed class GameSession
                     var worldDelta = Vector3.Transform(horizontalMeters, heading);
                     if (float.IsFinite(worldDelta.X) && float.IsFinite(worldDelta.Z))
                     {
-                        ErikaPosition += new Vector3(worldDelta.X, 0f, worldDelta.Z);
+                        requestedDisplacement = new Vector3(worldDelta.X, 0f, worldDelta.Z);
                     }
                 }
             }
         }
+
+        // Phase 2N: constrain the root-motion-requested displacement against the
+        // static environment. Collision is a constraint only; it never adds a
+        // second velocity/position authority, never rotates Erika, and never
+        // touches the Phase 2I speed envelope or the Phase 2K playback clock.
+        ApplyPlayerCollision(requestedDisplacement);
 
         // Phase 2H: follow with the current (post-movement) Erika position so the
         // rendered camera looks exactly at her now; only the camera position
@@ -763,6 +814,40 @@ public sealed class GameSession
             var sourceRate = VisualRateFor(transition.SourceClipName);
             _sourcePoseClock.Advance(deltaSeconds, sourceRate, ClipDurationFor(transition.SourceClipName));
         }
+    }
+
+    /// <summary>
+    /// Phase 2N apply the requested root-motion displacement to Erika's world
+    /// position, constrained by the static player-collision set. The collision
+    /// resolver only filters the requested translation; Erika's Y (flat ground)
+    /// and yaw are untouched. When collision is disabled the displacement is
+    /// applied verbatim, which is the Phase 2M behavior and the A/B seam.
+    /// </summary>
+    private void ApplyPlayerCollision(Vector3 requestedDisplacement)
+    {
+        RequestedPlayerDisplacement = requestedDisplacement;
+
+        if (!PlayerCollisionEnabled)
+        {
+            ErikaPosition += requestedDisplacement;
+            AcceptedPlayerDisplacement = requestedDisplacement;
+            WasPlayerCollisionConstrained = false;
+            PlayerCollisionHitCount = 0;
+            LastPlayerCollisionName = null;
+            return;
+        }
+
+        var resolved = PlayerCollisionResolver.Resolve(
+            PlayerCollisions,
+            new Vector2(ErikaPosition.X, ErikaPosition.Z),
+            new Vector2(requestedDisplacement.X, requestedDisplacement.Z),
+            PlayerCollisionPolicy.PlayerCollisionRadiusMeters);
+
+        ErikaPosition = new Vector3(resolved.Position.X, ErikaPosition.Y, resolved.Position.Y);
+        AcceptedPlayerDisplacement = new Vector3(resolved.Delta.X, 0f, resolved.Delta.Y);
+        WasPlayerCollisionConstrained = resolved.Constrained;
+        PlayerCollisionHitCount = resolved.HitCount;
+        LastPlayerCollisionName = resolved.LastHitName;
     }
 
     private void SyncErikaInstance()

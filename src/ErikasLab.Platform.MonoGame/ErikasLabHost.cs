@@ -73,7 +73,7 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
             $"{LonghouseLayout.Length:F0} m x {LonghouseLayout.Width:F0} m, walls {LonghouseLayout.WallHeight:F1} m, " +
             $"ridge {LonghouseLayout.RidgeHeight:F1} m, door {LonghouseLayout.DoorWidth:F1} x {LonghouseLayout.DoorHeight:F1} m, " +
             $"clearing {LonghouseLayout.ClearingSize:F0} m, tree ring r={LonghouseLayout.TreeRingRadius:F0} m " +
-            $"({LonghouseLayout.TreeCount} trees); spawn {LonghouseLayout.SpawnPosition} facing -Z; no player/camera collision");
+            $"({LonghouseLayout.TreeCount} trees); spawn {LonghouseLayout.SpawnPosition} facing -Z; player collision enabled");
 
         try
         {
@@ -89,6 +89,11 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
         }
 
         Console.WriteLine($"Camera policy: {_gameSession.CameraRig.DescribePolicy()}");
+        Console.WriteLine(
+            $"Player collision policy: {_gameSession.PlayerCollisions.Count} static XZ blockers " +
+            $"(longhouse shell + tree trunks), radius {PlayerCollisionPolicy.PlayerCollisionRadiusMeters:F2} m, " +
+            $"skin {PlayerCollisionPolicy.PlayerCollisionSkinMeters:F2} m, " +
+            $"slide iterations {PlayerCollisionPolicy.MaxSlideIterations}, flat XZ only (no gravity/jumping)");
         Console.WriteLine(
             "Locomotion playback policy: separate visual pose clock (root motion independent); " +
             $"rate = speed / authoredSpeed, bounds [{LocomotionPlaybackRates.MinimumRate}, {LocomotionPlaybackRates.MaximumRate}], idle 1x");
