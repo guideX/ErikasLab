@@ -211,6 +211,8 @@ helpers are limited to `CreateGroundRectangle` and `CreateTriangularPrism`, and
 new `ColorRgba` entries are the blockout palette; no new gameplay or animation
 behavior was required.
 
+Phase 2M adds: a small static third-person camera-obstruction system on top of the Phase 2H follow camera, so the camera no longer renders through the longhouse walls/roof or tree trunks. A portable `CameraObstructionSet` (Engine) holds 32 oriented boxes (`CameraObstructionBox`: center, half extents, orientation) built once by `EnvironmentFactory` from the same authoritative `LonghouseLayout` as the rendered geometry: the two long walls, rear wall, the two front doorway flanking segments, the doorway lintel, the two rotated pitched roof slabs, and the 24 tree trunks. `ThirdPersonCamera.Follow` spherecasts the target-to-candidate segment against the radius-expanded boxes (Minkowski-expanded slab test in each box's local space) and, on the nearest hit, clamps the camera immediately to just in front of the obstruction (hit distance minus a centralized 0.05 m surface padding); when the line of sight is clear the existing exponential follow smoothing moves the camera back outward naturally. The camera is treated as a 0.25 m sphere (centralized `CameraCollisionPolicy.CollisionRadiusMeters`), and a single flat camera floor at 0.15 m keeps it above the ground plane at high positive pitch. The orbit/control basis (`ControlForward`/`ControlRight`) is derived from orbit yaw only and is never touched by collision, so WASD behavior is bit-identical with obstruction enabled or disabled (covered by A/B gameplay tests at 30/60/144 Hz). The genuine doorway stays open: the flanking segments + lintel mirror the rendered wall arrangement, so camera lines through the door center remain unobstructed while off-center casts are blocked. Boxes containing the look target are ignored for the query (robust starting-inside policy until player collision exists). Gables (triangular prisms), posts (subsumed by the wall boxes), and canopies are intentionally not colliders. There is still no player collision and no physics engine; Erika may walk through walls, and the camera stays finite in that case. All Phase 2E–2L locomotion, animation, camera, and environment tests remain passing (415 total).
+
 Meshes are generated in code for the proof scene, and canonical Erika arrives through the content pipeline described below, so no manual asset authoring is required yet.
 
 ## Erika content (Phase 2B)
@@ -390,9 +392,46 @@ final view the renderer consumes. The renderer never computes follow behavior.
 - Deferred: no camera collision/occlusion/raycasts; the camera may pass through
   walls, terrain, and props until real environment geometry exists.
 
+## Camera obstruction (Phase 2M)
+
+The follow camera now avoids static environment geometry. The renderer never
+raycasts; the collision math is portable Engine code with no MonoGame
+dependency.
+
+- Representation: 32 static oriented boxes (`CameraObstructionBox`) built once
+  by `EnvironmentFactory` from `LonghouseLayout` — 6 wall boxes (long walls,
+  rear, front flanking segments, doorway lintel), 2 rotated roof slabs, 24 tree
+  trunks. Each box mirrors the matching scene object's name, center, half
+  extents, and orientation.
+- Query: per frame, `Follow` spherecasts the target-to-candidate segment
+  against every box expanded by the camera radius (0.25 m) using a slab test in
+  the box's local space; the nearest hit wins regardless of iteration order.
+  O(boxes), allocation-free, no mesh/triangle tests.
+- Response: on a hit the camera clamps immediately to
+  `hit distance - 0.05 m padding` along the target-to-candidate line (fast
+  pull-in, no wall penetration); when unobstructed the existing exponential
+  smoothing (rate 10/s) moves the camera back outward smoothly. A single flat
+  camera floor at 0.15 m prevents below-ground views at high positive pitch.
+- Doorway: the flanking segments + lintel keep the real 1.2 m x 2.0 m doorway
+  open; camera lines through the door center are unobstructed (the camera sphere
+  must stay below y = 1.75 to fit), off-center casts are blocked.
+- Starting-inside policy: a box containing the look target is ignored for the
+  query, so Erika walking through a wall (no player collision yet) cannot
+  collapse the camera or emit NaNs. Player penetration is not solved.
+- Control basis: collision changes only the camera *position*;
+  `ControlForward`/`ControlRight` still derive from orbit yaw alone, so WASD is
+  identical with obstruction on or off (A/B tested, including 30/60/144 Hz).
+- Diagnostics: `IsCameraObstructed`, `NominalDesiredDistance`,
+  `ActualTargetDistance`, `NearestObstructionHitFraction`, `ObstructionCount`;
+  the startup `Camera policy:` line reports the active box count/radius/padding.
+- Limitations: no player collision, no physics, no wall sliding/corner
+  resolution (hard clamping can pop bounded by the nominal distance when the
+  lagging camera's line of sight suddenly crosses a wall), no character fading
+  or first-person fallback, gables/posts/canopies are not colliders.
+
 ## Deferred work
 
-Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation state machines/blend trees, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. Phase 2F covered short crossfades and turn-rate smoothing; Phase 2G added the third-person follow/orbit camera; Phase 2H made the camera continuously look at Erika and aligned her spawn facing with initial forward movement; Phase 2I added acceleration/deceleration movement response (speed envelope scaling the single authored root-motion authority); Phase 2J added stationary turn-in-place (a gated 45°-enter/15°-release procedural pivot that holds idle and zero translational target until the heading error is resolved, then releases through the existing speed envelope); Phase 2K synchronized the visible locomotion playback rate with the Phase 2I speed envelope through a separate pose clock, bounding the run→walk raw rate at 2×. Phase 2L added the first environment blockout (Viking longhouse in a forest clearing) as static vertex-colored geometry owned by a centralized portable layout. With real environment geometry now present, the smallest logical next step is a camera collision/obstruction pass (the 4.5 m third-person camera clips through the longhouse walls/roof), followed by player collision against the longhouse shell; stride warping/foot IK to remove the remaining capped run→walk slide and authored turn-in-place clips remain valid later steps. Final textures/models are intentionally deferred.
+Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation state machines/blend trees, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. Phase 2F covered short crossfades and turn-rate smoothing; Phase 2G added the third-person follow/orbit camera; Phase 2H made the camera continuously look at Erika and aligned her spawn facing with initial forward movement; Phase 2I added acceleration/deceleration movement response (speed envelope scaling the single authored root-motion authority); Phase 2J added stationary turn-in-place (a gated 45°-enter/15°-release procedural pivot that holds idle and zero translational target until the heading error is resolved, then releases through the existing speed envelope); Phase 2K synchronized the visible locomotion playback rate with the Phase 2I speed envelope through a separate pose clock, bounding the run→walk raw rate at 2×. Phase 2L added the first environment blockout (Viking longhouse in a forest clearing) as static vertex-colored geometry owned by a centralized portable layout. Phase 2M added the static camera-obstruction pass (32 oriented boxes, spherecast pull-in, smooth outward recovery) on the real environment geometry. With the camera no longer clipping through the longhouse, the smallest logical next step is player collision against the longhouse shell (Erika can still walk through walls); camera corner-snapping/character fading, stride warping/foot IK to remove the remaining capped run→walk slide, and authored turn-in-place clips remain valid later steps. Final textures/models are intentionally deferred.
 
 ## Repository hygiene
 

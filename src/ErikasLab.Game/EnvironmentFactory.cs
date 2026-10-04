@@ -56,6 +56,103 @@ public static class EnvironmentFactory
         return scene;
     }
 
+    /// <summary>
+    /// Phase 2M static camera-obstruction set for the Phase 2L environment. Owns
+    /// the obstruction descriptions (per the responsibility split: environment
+    /// owns them, the camera rig consumes them). Every box derives from the same
+    /// authoritative <see cref="LonghouseLayout"/> dimensions as the rendered
+    /// geometry and mirrors the matching scene object's name, center, half
+    /// extents, and orientation: the long walls, rear wall, the two front
+    /// doorway flanking segments, the doorway lintel, and the two rotated
+    /// pitched roof slabs, plus one box per tree trunk. The lintel and flanking
+    /// segments keep the genuine doorway open for camera sight lines. Posts are
+    /// subsumed by the wall boxes they sit in; gables are triangular prisms and
+    /// are intentionally not approximated by oversized boxes; canopies are not
+    /// aggressive blockers. Built once; no per-frame collider construction.
+    /// </summary>
+    public static CameraObstructionSet CreateCameraObstructions()
+    {
+        var boxes = new List<CameraObstructionBox>();
+
+        var halfWidth = LonghouseLayout.HalfWidth;
+        var height = LonghouseLayout.WallHeight;
+        var thickness = LonghouseLayout.WallThickness;
+        var halfThickness = thickness / 2f;
+        var y = height / 2f;
+
+        boxes.Add(new CameraObstructionBox(
+            "Wall.Left",
+            new Vector3(-halfWidth, y, LonghouseLayout.Origin.Z),
+            new Vector3(halfThickness, height / 2f, LonghouseLayout.HalfLength),
+            Quaternion.Identity));
+        boxes.Add(new CameraObstructionBox(
+            "Wall.Right",
+            new Vector3(halfWidth, y, LonghouseLayout.Origin.Z),
+            new Vector3(halfThickness, height / 2f, LonghouseLayout.HalfLength),
+            Quaternion.Identity));
+        boxes.Add(new CameraObstructionBox(
+            "Wall.Rear",
+            new Vector3(LonghouseLayout.Origin.X, y, LonghouseLayout.RearZ),
+            new Vector3(halfWidth, height / 2f, halfThickness),
+            Quaternion.Identity));
+
+        // Front end wall: two flanking segments plus the lintel above the
+        // opening, mirroring the rendered arrangement so the doorway itself
+        // stays open for camera lines.
+        var doorHalf = LonghouseLayout.DoorWidth / 2f;
+        var segmentWidth = halfWidth - doorHalf;
+        var segmentCenterX = doorHalf + segmentWidth / 2f;
+        var frontZ = LonghouseLayout.FrontZ;
+        boxes.Add(new CameraObstructionBox(
+            "Wall.Front.Left",
+            new Vector3(-segmentCenterX, y, frontZ),
+            new Vector3(segmentWidth / 2f, height / 2f, halfThickness),
+            Quaternion.Identity));
+        boxes.Add(new CameraObstructionBox(
+            "Wall.Front.Right",
+            new Vector3(segmentCenterX, y, frontZ),
+            new Vector3(segmentWidth / 2f, height / 2f, halfThickness),
+            Quaternion.Identity));
+
+        var lintelHeight = height - LonghouseLayout.DoorHeight;
+        var lintelCenterY = LonghouseLayout.DoorHeight + lintelHeight / 2f;
+        boxes.Add(new CameraObstructionBox(
+            "Wall.Front.Lintel",
+            new Vector3(LonghouseLayout.Origin.X, lintelCenterY, frontZ),
+            new Vector3(doorHalf, lintelHeight / 2f, halfThickness),
+            Quaternion.Identity));
+
+        // Pitched roof slabs: same centers, half extents, and rotations as the
+        // rendered slabs (oriented boxes, not a world AABB).
+        var roofHalf = new Vector3(
+            LonghouseLayout.RoofSlopeLength / 2f,
+            LonghouseLayout.RoofThickness / 2f,
+            LonghouseLayout.RoofLengthZ / 2f);
+        var roofCenterX = LonghouseLayout.RoofHalfSpanX / 2f;
+        var roofCenterY = LonghouseLayout.RoofSlabCenterY;
+        var roofZ = LonghouseLayout.Origin.Z;
+        var roofLeft = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, LonghouseLayout.RoofSlopeAngleRadians);
+        var roofRight = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, MathF.PI - LonghouseLayout.RoofSlopeAngleRadians);
+        boxes.Add(new CameraObstructionBox("Roof.Left", new Vector3(-roofCenterX, roofCenterY, roofZ), roofHalf, roofLeft));
+        boxes.Add(new CameraObstructionBox("Roof.Right", new Vector3(roofCenterX, roofCenterY, roofZ), roofHalf, roofRight));
+
+        // Tree trunks (canopies intentionally excluded).
+        for (var i = 0; i < LonghouseLayout.TreeCount; i++)
+        {
+            var position = LonghouseLayout.TreePosition(i);
+            var scale = LonghouseLayout.TreeScale(i);
+            var trunkWidth = LonghouseLayout.TreeTrunkWidth * scale;
+            var trunkHeight = LonghouseLayout.TreeTrunkHeight * scale;
+            boxes.Add(new CameraObstructionBox(
+                $"Tree.{i:00}.Trunk",
+                position + new Vector3(0f, trunkHeight / 2f, 0f),
+                new Vector3(trunkWidth / 2f, trunkHeight / 2f, trunkWidth / 2f),
+                Quaternion.CreateFromYawPitchRoll(LonghouseLayout.TreeYawRadians(i), 0f, 0f)));
+        }
+
+        return new CameraObstructionSet(boxes.ToArray());
+    }
+
     private static void AddGrounds(Scene scene, MeshData forestGround, MeshData clearing, MeshData floor)
     {
         scene.Add(new SceneObject(

@@ -77,6 +77,30 @@ public sealed class ThirdPersonCamera
     /// <summary>Preserved Phase 1 arrow-key look speed (radians per second).</summary>
     public const float DefaultKeyboardLookSpeed = 1.7f;
 
+    /// <summary>
+    /// Phase 2M static camera-obstruction set used by <see cref="Follow"/>. Null
+    /// disables obstruction (validation/A-B seam). When set, the follow
+    /// position is clamped against the radius-expanded boxes so the camera
+    /// never renders through walls/roof/trunks; the orbit/control basis is
+    /// untouched.
+    /// </summary>
+    public CameraObstructionSet? Obstructions { get; set; }
+
+    /// <summary>Phase 2M true when the latest <see cref="Follow"/> clamped the camera against an obstruction.</summary>
+    public bool IsCameraObstructed { get; private set; }
+
+    /// <summary>Phase 2M distance (meters) from the look target to the nominal (unobstructed) desired position.</summary>
+    public float NominalDesiredDistance { get; private set; }
+
+    /// <summary>Phase 2M distance (meters) from the look target to the final collision-adjusted camera position.</summary>
+    public float ActualTargetDistance { get; private set; }
+
+    /// <summary>Phase 2M fraction [0,1] of the nearest obstruction hit along the target-to-candidate segment (0 when unobstructed).</summary>
+    public float NearestObstructionHitFraction { get; private set; }
+
+    /// <summary>Phase 2M number of static obstruction boxes in the active set (0 when disabled).</summary>
+    public int ObstructionCount => Obstructions?.Count ?? 0;
+
     /// <summary>Lowest pitch (~-68.8 deg): camera high above, looking down.</summary>
     public const float MinPitchRadians = -1.2f;
 
@@ -224,8 +248,10 @@ public sealed class ThirdPersonCamera
     {
         ArgumentNullException.ThrowIfNull(camera);
 
+        var target = TargetPoint(targetWorldPosition);
         var desired = DesiredPosition(targetWorldPosition);
         var deltaSeconds = Math.Max(0, frameTime.DeltaSeconds);
+        NominalDesiredDistance = Vector3.Distance(target, desired);
 
         if (!IsInitialized || !IsFinite(Position) || Vector3.Distance(Position, desired) > SnapDistanceMeters)
         {
@@ -238,8 +264,72 @@ public sealed class ThirdPersonCamera
             Position += (desired - Position) * alpha;
         }
 
+        // Phase 2M: clamp the smoothed candidate against static obstructions
+        // (immediate pull-in), then apply the single flat camera floor. The
+        // orbit/control basis is never touched by any of this. The floor is
+        // skipped in the degenerate case (camera at the look target) so the
+        // Phase 2H orbit-basis fallback is preserved.
+        ApplyObstruction(target);
+        if (Vector3.Distance(target, Position) > MinLookDistanceMeters)
+        {
+            ApplyFloor();
+        }
+
+        ActualTargetDistance = Vector3.Distance(target, Position);
         camera.Position = Position;
         ApplyView(camera, targetWorldPosition);
+    }
+
+    /// <summary>
+    /// Phase 2M obstruction response. Spherecasts the target-to-candidate
+    /// segment against the radius-expanded static boxes and, on the nearest
+    /// hit, clamps the camera immediately to just in front of the obstruction
+    /// (hit distance minus the centralized surface padding, never inside the
+    /// expanded collider). When unobstructed the smoothed candidate is kept
+    /// unchanged, so the existing exponential follow smoothing moves the camera
+    /// back outward naturally once the line of sight clears.
+    /// </summary>
+    private void ApplyObstruction(Vector3 target)
+    {
+        IsCameraObstructed = false;
+        NearestObstructionHitFraction = 0f;
+
+        if (Obstructions is not { Count: > 0 })
+        {
+            return;
+        }
+
+        if (!Obstructions.Value.CastSegment(target, Position, out var hit))
+        {
+            return;
+        }
+
+        var segment = Position - target;
+        var segmentLength = segment.Length();
+        if (segmentLength < 1e-6f)
+        {
+            return;
+        }
+
+        var safeDistance = MathF.Max(
+            hit.Distance - CameraCollisionPolicy.SurfacePaddingMeters,
+            CameraCollisionPolicy.MinCameraDistanceMeters);
+        Position = target + segment / segmentLength * safeDistance;
+        IsCameraObstructed = true;
+        NearestObstructionHitFraction = hit.Fraction;
+    }
+
+    /// <summary>
+    /// Phase 2M single flat camera floor at the established ground height.
+    /// Needed because the positive pitch limit would otherwise place the camera
+    /// below the flat ground plane. One hard constraint; no terrain queries.
+    /// </summary>
+    private void ApplyFloor()
+    {
+        if (Position.Y < CameraCollisionPolicy.CameraFloorHeightMeters)
+        {
+            Position = new Vector3(Position.X, CameraCollisionPolicy.CameraFloorHeightMeters, Position.Z);
+        }
     }
 
     /// <summary>
@@ -277,7 +367,8 @@ public sealed class ThirdPersonCamera
         $"orbit yaw {OrbitYawRadians:F2} rad pitch {OrbitPitchRadians:F2} rad " +
         $"limits [{MinPitchRadians:F2}, {MaxPitchRadians:F2}], " +
         $"follow rate {FollowSmoothingRatePerSecond:F1}/s, snap {SnapDistanceMeters:F0} m, " +
-        $"mouse sensitivity {MouseLookSensitivity}";
+        $"mouse sensitivity {MouseLookSensitivity}, " +
+        $"obstruction: {(Obstructions is { Count: > 0 } ? $"{Obstructions.Value.Count} boxes, radius {CameraCollisionPolicy.CollisionRadiusMeters:F2} m, padding {CameraCollisionPolicy.SurfacePaddingMeters:F2} m, floor {CameraCollisionPolicy.CameraFloorHeightMeters:F2} m" : "disabled")}";
 
     private static bool IsFinite(Vector3 value) =>
         float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);

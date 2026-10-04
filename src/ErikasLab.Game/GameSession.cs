@@ -88,6 +88,11 @@ public sealed class GameSession
     {
         World = EnvironmentFactory.Create();
 
+        // Phase 2M: the environment owns the static obstruction descriptions;
+        // hand them to the camera rig, which owns the constrained position.
+        CameraObstructions = EnvironmentFactory.CreateCameraObstructions();
+        _thirdPersonCamera.Obstructions = CameraObstructions;
+
         // GameSession owns Erika: the environment builds static geometry only and
         // this instance's transform is synced from her authoritative state.
         World.AddModel(ErikaFigure.CreateInstance());
@@ -102,12 +107,19 @@ public sealed class GameSession
         ErikaYawRadians = _thirdPersonCamera.InitialFacingYawRadians;
 
         // Phase 2G: establish a settled third-person frame at spawn (snap, not
-        // a cross-world fly-in). No collision yet; the camera may pass through
-        // scene geometry.
+        // a cross-world fly-in). Phase 2M: the spawn frame is outside the
+        // longhouse and unobstructed; player collision still does not exist.
         _thirdPersonCamera.SnapToTarget(Camera, ErikaPosition);
     }
 
     public Scene World { get; }
+
+    /// <summary>
+    /// Phase 2M static camera-obstruction set owned by the environment and
+    /// consumed by <see cref="CameraRig"/>. The rig clamps its follow position
+    /// against these boxes; player movement is never affected.
+    /// </summary>
+    public CameraObstructionSet CameraObstructions { get; }
 
     public CameraState Camera { get; }
 
