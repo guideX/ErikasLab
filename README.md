@@ -430,8 +430,9 @@ dependency.
   the startup `Camera policy:` line reports the active box count/radius/padding.
 - Limitations: no player collision, no physics, no wall sliding/corner
   resolution (hard clamping can pop bounded by the nominal distance when the
-  lagging camera's line of sight suddenly crosses a wall), no character fading
-  or first-person fallback, gables/posts/canopies are not colliders.
+  lagging camera's line of sight suddenly crosses a wall — addressed by the
+  Phase 2Q camera-body sweep/slide below), no character fading or first-person
+  fallback, gables/posts/canopies are not colliders.
 
 ## Player collision (Phase 2N)
 
@@ -560,6 +561,62 @@ path. No second animation or movement system is added.
   approached at a shallow angle can still be slid around (correct behavior —
   Erika navigates around small trees); the blocked response targets sustained
   obstruction, not transient corner contact.
+
+## Camera corner sliding (Phase 2Q)
+
+The Phase 2M hard visibility clamp is now preceded by a camera-body
+sweep-and-slide stage, so the physical camera sphere sweeps and slides around
+obstruction surfaces instead of relying only on radial pull-ins. The camera
+architecture (orbit/control basis, follow smoothing, target look-at) is
+unchanged; this is an additional position-resolution stage.
+
+- Position resolution order: raw orbit/follow candidate (snap or exponential
+  smoothing) -> camera-body sweep/slide against the static obstructions ->
+  Phase 2M target-to-camera visibility clamp (final authority) -> single flat
+  camera floor (0.15 m) -> rendered look-at orientation. On snap frames the
+  body stage reduces to a bounded depenetration of the snapped position.
+- Body motion: the camera is the same 0.25 m sphere as Phase 2M. Each frame
+  the smoothed displacement is resolved by `CameraCollisionResolver`
+  (portable Engine code, allocation-free, no LINQ): a bounded depenetration
+  (4 iterations, 1.0 m correction cap, deterministic tie-breaking) followed
+  by a bounded sweep-and-slide (3 iterations, 0.01 m skin). The sphere moves
+  to the safe contact, the inward normal component is removed, and the
+  tangential remainder continues. No bounce, restitution, or spring forces.
+- Math: `CameraObstructionSet.Sweep` reuses the Phase 2M local-space segment
+  transform, Minkowski box expansion, and slab test, extended with
+  deterministic entry-axis tracking so the world-space contact normal (the
+  face actually entered through) is reported. A segment starting inside the
+  expanded box reports fraction 0 with the least-penetration outward normal.
+- Corners: a diagonal sweep into a convex corner slides along one face and
+  then the other (two surface contacts within the iteration bound); a
+  concave corner naturally collapses the remaining displacement to zero.
+  Simultaneous hits use deterministic nearest-hit/least-penetration ties;
+  normals are never averaged.
+- Visibility remains non-negotiable: after the body stage, the Phase 2M
+  target-to-camera cast is the final authority. Every scripted corner scenario
+  (exterior corners, interior long-wall corners, doorway jamb, wall-to-roof,
+  tree trunk) asserts the final sight line is unobstructed and the camera is
+  never inside an obstruction.
+- Diagnostics (distinct from the visibility clamp): `WasCameraMotionConstrained`,
+  `CameraSlideHitCount`, `LastCameraSlideBlocker`, `CameraVisibilityConstrained`;
+  the existing `IsCameraObstructed` still reports the visibility clamp. The
+  startup `Camera policy:` line reports the slide iteration count and skin.
+- Control basis: body sliding changes only `Camera.Position`.
+  `ControlForward`/`ControlRight` still derive from orbit yaw alone; WASD,
+  movement intent, Erika yaw, root motion, and the Phase 2P blocked-movement
+  probe/latch are identical with the body slide enabled or disabled
+  (`CameraBodySlideEnabled` A/B seam, tested at 30/60/144 Hz).
+- Measured result (72-step interior-corner orbit, 60 Hz): the Phase 2M
+  maximum single-frame camera step was 2.698 m (hard clamp pop when the
+  nearest line-of-sight blocker changes at the corner); with body sliding it
+  is 0.334 m (87.6% reduction), and the camera no longer collapses toward
+  Erika (minimum constrained distance 0.25 m vs 0.08 m legacy).
+- Limitations: the slide is a bounded 3-iteration resolver, not a manifold
+  solver; a camera may still move quickly when geometry genuinely leaves no
+  continuous path (the visibility clamp remains the hard guarantee). No
+  character fading, wall transparency, first-person fallback, shoulder swap,
+  lock-on, auto-recenter, cinematic camera, player-collision changes, or
+  blocked-movement changes.
 
 ## Deferred work
 

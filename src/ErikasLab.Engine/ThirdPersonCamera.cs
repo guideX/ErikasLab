@@ -101,6 +101,28 @@ public sealed class ThirdPersonCamera
     /// <summary>Phase 2M number of static obstruction boxes in the active set (0 when disabled).</summary>
     public int ObstructionCount => Obstructions?.Count ?? 0;
 
+    /// <summary>
+    /// Phase 2Q A/B seam for the camera-body sweep/slide stage. True (default)
+    /// resolves the smoothed camera displacement against the static obstructions
+    /// so the camera sphere slides along walls/corners instead of relying only
+    /// on the radial visibility clamp. False reproduces the Phase 2M legacy
+    /// behavior (smoothing + visibility clamp only). The visibility clamp remains
+    /// the final authority either way; the orbit/control basis is untouched.
+    /// </summary>
+    public bool CameraBodySlideEnabled { get; set; } = true;
+
+    /// <summary>Phase 2Q true when the latest <see cref="Follow"/> constrained the camera body motion (depenetration or slide contact).</summary>
+    public bool WasCameraMotionConstrained { get; private set; }
+
+    /// <summary>Phase 2Q number of camera-body slide contacts resolved during the latest <see cref="Follow"/> (0 when unconstrained).</summary>
+    public int CameraSlideHitCount { get; private set; }
+
+    /// <summary>Phase 2Q name of the last camera-body slide blocker hit (null when unconstrained).</summary>
+    public string? LastCameraSlideBlocker { get; private set; }
+
+    /// <summary>Phase 2Q true when the latest <see cref="Follow"/> applied the target-to-camera visibility clamp.</summary>
+    public bool CameraVisibilityConstrained { get; private set; }
+
     /// <summary>Lowest pitch (~-68.8 deg): camera high above, looking down.</summary>
     public const float MinPitchRadians = -1.2f;
 
@@ -239,10 +261,17 @@ public sealed class ThirdPersonCamera
     /// first use, on non-finite state, or when the discontinuity threshold is
     /// exceeded; zero elapsed time produces no movement.
     ///
-    /// The written orientation is the rendered look-at direction
-    /// (<c>normalize(target - camera.Position)</c>) so the target stays centred
-    /// even while the position lags; the movement/control basis is unaffected
-    /// (use <see cref="ControlForward"/>/<see cref="ControlRight"/>).
+    /// Position resolution order: raw orbit/follow candidate (snap or exponential
+    /// smoothing) -> Phase 2Q camera-body sweep/slide against the static
+    /// obstructions (when enabled and obstructions are set) -> Phase 2M
+    /// target-to-camera visibility clamp (final authority) -> single flat camera
+    /// floor -> rendered look-at orientation. The written orientation is the
+    /// rendered look-at direction (<c>normalize(target - camera.Position)</c>) so
+    /// the target stays centred even while the position lags; the
+    /// movement/control basis is unaffected (use
+    /// <see cref="ControlForward"/>/<see cref="ControlRight"/>). The floor is
+    /// skipped in the degenerate case (camera at the look target) so the
+    /// Phase 2H orbit-basis fallback is preserved.
     /// </summary>
     public void Follow(CameraState camera, Vector3 targetWorldPosition, FrameTime frameTime)
     {
@@ -253,7 +282,14 @@ public sealed class ThirdPersonCamera
         var deltaSeconds = Math.Max(0, frameTime.DeltaSeconds);
         NominalDesiredDistance = Vector3.Distance(target, desired);
 
-        if (!IsInitialized || !IsFinite(Position) || Vector3.Distance(Position, desired) > SnapDistanceMeters)
+        WasCameraMotionConstrained = false;
+        CameraSlideHitCount = 0;
+        LastCameraSlideBlocker = null;
+        CameraVisibilityConstrained = false;
+
+        var previous = Position;
+        var snapped = !IsInitialized || !IsFinite(Position) || Vector3.Distance(Position, desired) > SnapDistanceMeters;
+        if (snapped)
         {
             Position = desired;
             IsInitialized = true;
@@ -264,11 +300,26 @@ public sealed class ThirdPersonCamera
             Position += (desired - Position) * alpha;
         }
 
-        // Phase 2M: clamp the smoothed candidate against static obstructions
-        // (immediate pull-in), then apply the single flat camera floor. The
-        // orbit/control basis is never touched by any of this. The floor is
-        // skipped in the degenerate case (camera at the look target) so the
-        // Phase 2H orbit-basis fallback is preserved.
+        // Phase 2Q: resolve the smoothed camera displacement against the static
+        // obstructions so the camera sphere slides along surfaces instead of
+        // crossing them. On snap frames the displacement is zero, so this
+        // reduces to a bounded depenetration of the snapped position. When
+        // unobstructed the resolve is a bit-identical no-op, so the existing
+        // follow smoothing is unchanged. The orbit/control basis is never
+        // touched by any of this.
+        if (CameraBodySlideEnabled && Obstructions is { Count: > 0 })
+        {
+            var motion = snapped
+                ? CameraCollisionResolver.Resolve(Obstructions.Value, Position, Vector3.Zero, CameraCollisionPolicy.CollisionRadiusMeters)
+                : CameraCollisionResolver.Resolve(Obstructions.Value, previous, Position - previous, CameraCollisionPolicy.CollisionRadiusMeters);
+            Position = motion.Position;
+            WasCameraMotionConstrained = motion.Constrained;
+            CameraSlideHitCount = motion.HitCount;
+            LastCameraSlideBlocker = motion.LastHitName;
+        }
+
+        // Phase 2M: clamp the resolved candidate against static obstructions
+        // (immediate pull-in), then apply the single flat camera floor.
         ApplyObstruction(target);
         if (Vector3.Distance(target, Position) > MinLookDistanceMeters)
         {
@@ -281,17 +332,20 @@ public sealed class ThirdPersonCamera
     }
 
     /// <summary>
-    /// Phase 2M obstruction response. Spherecasts the target-to-candidate
-    /// segment against the radius-expanded static boxes and, on the nearest
-    /// hit, clamps the camera immediately to just in front of the obstruction
-    /// (hit distance minus the centralized surface padding, never inside the
-    /// expanded collider). When unobstructed the smoothed candidate is kept
-    /// unchanged, so the existing exponential follow smoothing moves the camera
-    /// back outward naturally once the line of sight clears.
+    /// Phase 2M visibility clamp (final authority). Spherecasts the
+    /// target-to-candidate segment against the radius-expanded static boxes and,
+    /// on the nearest hit, clamps the camera immediately to just in front of the
+    /// obstruction (hit distance minus the centralized surface padding, never
+    /// inside the expanded collider). When unobstructed the resolved candidate
+    /// is kept unchanged, so the existing exponential follow smoothing moves the
+    /// camera back outward naturally once the line of sight clears. Runs after
+    /// the Phase 2Q camera-body sweep/slide, so a body-valid position whose view
+    /// is still blocked is pulled in radially as a final safety layer.
     /// </summary>
     private void ApplyObstruction(Vector3 target)
     {
         IsCameraObstructed = false;
+        CameraVisibilityConstrained = false;
         NearestObstructionHitFraction = 0f;
 
         if (Obstructions is not { Count: > 0 })
@@ -316,6 +370,7 @@ public sealed class ThirdPersonCamera
             CameraCollisionPolicy.MinCameraDistanceMeters);
         Position = target + segment / segmentLength * safeDistance;
         IsCameraObstructed = true;
+        CameraVisibilityConstrained = true;
         NearestObstructionHitFraction = hit.Fraction;
     }
 
@@ -368,7 +423,7 @@ public sealed class ThirdPersonCamera
         $"limits [{MinPitchRadians:F2}, {MaxPitchRadians:F2}], " +
         $"follow rate {FollowSmoothingRatePerSecond:F1}/s, snap {SnapDistanceMeters:F0} m, " +
         $"mouse sensitivity {MouseLookSensitivity}, " +
-        $"obstruction: {(Obstructions is { Count: > 0 } ? $"{Obstructions.Value.Count} boxes, radius {CameraCollisionPolicy.CollisionRadiusMeters:F2} m, padding {CameraCollisionPolicy.SurfacePaddingMeters:F2} m, floor {CameraCollisionPolicy.CameraFloorHeightMeters:F2} m" : "disabled")}";
+        $"obstruction: {(Obstructions is { Count: > 0 } ? $"{Obstructions.Value.Count} boxes, radius {CameraCollisionPolicy.CollisionRadiusMeters:F2} m, padding {CameraCollisionPolicy.SurfacePaddingMeters:F2} m, floor {CameraCollisionPolicy.CameraFloorHeightMeters:F2} m, body slide {(CameraBodySlideEnabled ? $"on, {CameraCollisionPolicy.MaxCameraSlideIterations} iterations, skin {CameraCollisionPolicy.CameraSlideSkinMeters:F2} m" : "off")}" : "disabled")}";
 
     private static bool IsFinite(Vector3 value) =>
         float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);

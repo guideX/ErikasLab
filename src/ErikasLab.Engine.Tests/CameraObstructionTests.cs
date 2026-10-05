@@ -515,19 +515,30 @@ public sealed class CameraObstructionTests
         rig.SetOrbit(-MathF.PI / 2, ThirdPersonCamera.DefaultOrbitPitchRadians);
         rig.SnapToTarget(camera, target);
 
+        // The snap frame still pulls inward immediately (visibility clamp).
         Assert.True(rig.IsCameraObstructed);
         Assert.True(IsFinite(camera.Position));
         Assert.False(IsInsideAnyCollider(rig.Obstructions!.Value, camera.Position));
         Assert.True(camera.Position.X < 3.125f + Radius, "camera must stay inside the expanded wall");
         Assert.True(camera.Position.X > 0f, "camera must remain on Erika's visible side");
 
+        // Phase 2Q: the camera body then slides along the wall instead of being
+        // radially clamped every frame. The visibility clamp releases once the
+        // slid position has a clear line of sight; the camera must never
+        // penetrate and must keep a useful distance (no collapse toward Erika).
         for (var i = 1; i <= 60; i++)
         {
             rig.Follow(camera, target, new FrameTime(i * 0.016, 0.016));
             Assert.True(IsFinite(camera.Position));
             Assert.False(IsInsideAnyCollider(rig.Obstructions!.Value, camera.Position));
-            Assert.True(rig.IsCameraObstructed);
+            Assert.True(camera.Position.X > 0f, "camera must remain on Erika's visible side");
+            Assert.True(rig.ActualTargetDistance > 2.0f, $"camera collapsed to {rig.ActualTargetDistance:F3} m");
         }
+
+        // The camera settles at the wall surface (skin offset), not at the
+        // radial clamp distance: sliding retains more useful distance.
+        Assert.True(camera.Position.X > 2.5f, $"camera slid to X={camera.Position.X:F3}, expected near the wall surface");
+        Assert.False(rig.IsCameraObstructed);
     }
 
     [Fact]
@@ -902,7 +913,13 @@ public sealed class CameraObstructionTests
             Assert.Equal(results[0].Obstructed, results[i].Obstructed);
         }
 
-        Assert.All(results, result => Assert.True(result.Obstructed));
+        // Phase 2Q: the camera slides to the wall surface at every frame rate;
+        // the visibility clamp releases once the slid line of sight is clear.
+        Assert.All(results, result =>
+        {
+            Assert.False(result.Obstructed);
+            Assert.True(result.Distance > 2.5f);
+        });
     }
 
     [Fact]
