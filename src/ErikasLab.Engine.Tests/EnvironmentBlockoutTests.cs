@@ -306,6 +306,92 @@ public sealed class EnvironmentBlockoutTests
         Assert.True(colors >= 6, $"Expected several blockout materials, found {colors}");
     }
 
+    // --- normals (Phase 2R lighting foundation) ----------------------------
+
+    [Fact]
+    public void BoxNormalsMatchFaceDirections()
+    {
+        var mesh = MeshFactory.CreateBox(Vector3.One, ColorRgba.Timber);
+        var expected = new[]
+        {
+            Vector3.UnitZ, -Vector3.UnitZ, -Vector3.UnitX,
+            Vector3.UnitX, Vector3.UnitY, -Vector3.UnitY,
+        };
+
+        Assert.Equal(24, mesh.Vertices.Count);
+        for (var face = 0; face < 6; face++)
+        {
+            var normal = mesh.Vertices[face * 4].Normal;
+            Assert.Equal(expected[face].X, normal.X, precision: 5);
+            Assert.Equal(expected[face].Y, normal.Y, precision: 5);
+            Assert.Equal(expected[face].Z, normal.Z, precision: 5);
+            Assert.Equal(1f, normal.Length(), precision: 5);
+        }
+    }
+
+    [Fact]
+    public void GroundNormalsPointUp()
+    {
+        var mesh = MeshFactory.CreateGroundPlane(10f, ColorRgba.Ground);
+        Assert.All(mesh.Vertices, vertex =>
+        {
+            Assert.Equal(Vector3.UnitY.X, vertex.Normal.X, precision: 5);
+            Assert.Equal(Vector3.UnitY.Y, vertex.Normal.Y, precision: 5);
+            Assert.Equal(Vector3.UnitY.Z, vertex.Normal.Z, precision: 5);
+        });
+    }
+
+    [Fact]
+    public void TriangularPrismNormalsAreFiniteUnitAndCorrectlyOriented()
+    {
+        var mesh = MeshFactory.CreateTriangularPrism(new Vector3(7f, 2.4f, 0.25f), ColorRgba.WallWood);
+        Assert.Equal(18, mesh.Vertices.Count);
+
+        foreach (var vertex in mesh.Vertices)
+        {
+            Assert.True(IsFinite(vertex.Normal));
+            Assert.Equal(1f, vertex.Normal.Length(), precision: 4);
+        }
+
+        // Front cap faces +Z, back cap faces -Z, bottom faces -Y.
+        Assert.Equal(Vector3.UnitZ.Z, mesh.Vertices[0].Normal.Z, precision: 5);
+        Assert.Equal(-Vector3.UnitZ.Z, mesh.Vertices[3].Normal.Z, precision: 5);
+        Assert.Equal(-Vector3.UnitY.Y, mesh.Vertices[6].Normal.Y, precision: 5);
+
+        // Slope normals point outward and upward (positive Y, matching X side).
+        var leftSlope = mesh.Vertices[10].Normal;
+        Assert.True(leftSlope.Y > 0f, "roof slopes face upward");
+        Assert.True(leftSlope.X < 0f, "left slope faces -X");
+        var rightSlope = mesh.Vertices[14].Normal;
+        Assert.True(rightSlope.Y > 0f, "roof slopes face upward");
+        Assert.True(rightSlope.X > 0f, "right slope faces +X");
+    }
+
+    [Fact]
+    public void MeshGenerationIsDeterministic()
+    {
+        var first = MeshFactory.CreateBox(new Vector3(2f, 3f, 4f), ColorRgba.Timber);
+        var second = MeshFactory.CreateBox(new Vector3(2f, 3f, 4f), ColorRgba.Timber);
+        Assert.Equal(first.Vertices, second.Vertices);
+        Assert.Equal(first.Indices, second.Indices);
+
+        var prismFirst = MeshFactory.CreateTriangularPrism(new Vector3(7f, 2.4f, 0.25f), ColorRgba.WallWood);
+        var prismSecond = MeshFactory.CreateTriangularPrism(new Vector3(7f, 2.4f, 0.25f), ColorRgba.WallWood);
+        Assert.Equal(prismFirst.Vertices, prismSecond.Vertices);
+        Assert.Equal(prismFirst.Indices, prismSecond.Indices);
+    }
+
+    [Fact]
+    public void SceneObjectCarriesAnExplicitMaterial()
+    {
+        var scene = EnvironmentFactory.Create();
+        foreach (var sceneObject in scene.Objects)
+        {
+            Assert.True(sceneObject.Material.IsValid);
+            Assert.NotEqual(StaticMaterial.Default, sceneObject.Material);
+        }
+    }
+
     // --- integration -----------------------------------------------------
 
     [Fact]

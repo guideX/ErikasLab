@@ -15,6 +15,7 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
     private ModelLibrary? _modelLibrary;
     private AnimatedModelRenderer? _modelRenderer;
     private string _loggedClip = ErikaFigure.IdleClipName;
+    private bool _renderDiagnosticsLogged;
 
     public ErikasLabHost()
     {
@@ -28,14 +29,14 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
 
         Content.RootDirectory = "Content";
         IsMouseVisible = false;
-        Window.Title = "Erika's Lab - Phase 2L";
+        Window.Title = "Erika's Lab - Phase 2R";
         Window.AllowUserResizing = true;
         Window.ClientSizeChanged += OnClientSizeChanged;
     }
 
     protected override void Initialize()
     {
-        Console.WriteLine("Erika's Lab | Phase 2L | initializing");
+        Console.WriteLine("Erika's Lab | Phase 2R | initializing");
         Console.WriteLine($"Runtime: {RuntimeInformation.FrameworkDescription} ({RuntimeInformation.ProcessArchitecture})");
         base.Initialize();
     }
@@ -148,6 +149,17 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
         if (_gameSession is not null && _renderer is not null)
         {
             _gameSession.Render(_renderer);
+
+            if (!_renderDiagnosticsLogged)
+            {
+                _renderDiagnosticsLogged = true;
+                Console.WriteLine(
+                    $"Render material policy: {_renderer.LastSceneObjectCount} static objects, " +
+                    $"{_renderer.LastDistinctMaterialCount} materials ({_renderer.LastTexturedMaterialCount} textured), " +
+                    $"texture binds {_renderer.TextureBindCount}, texture fallbacks {_renderer.TextureFallbackCount}; " +
+                    $"ambient {_renderer.Lighting.AmbientLightColor}, " +
+                    $"key dir {_renderer.Lighting.Directional0.Direction} diffuse {_renderer.Lighting.Directional0.DiffuseColor}");
+            }
         }
 
         base.Draw(gameTime);

@@ -618,6 +618,67 @@ unchanged; this is an additional position-resolution stage.
   lock-on, auto-recenter, cinematic camera, player-collision changes, or
   blocked-movement changes.
 
+## Longhouse materials and environment lighting (Phase 2R)
+
+The Phase 2L blockout is now a coherent **material + lighting foundation** — still
+placeholder art, but no longer plain colored boxes. This is a rendering
+foundation pass, not final environment art.
+
+- Asset audit result: **Path B** — the repository ships no environment
+  textures (only git-ignored Erika character assets), so the architecture was
+  built with enhanced color/material treatment plus optional texture slots.
+- Material architecture: a minimal immutable `StaticMaterial` (Engine) —
+  base color, emissive color, optional `TextureId`, `TextureScale`, lighting
+  toggle — carried per `SceneObject`, separate from mesh identity. Eleven
+  shared category materials (`EnvironmentMaterials`, Game): deep structural
+  timber, muted weathered wall planks, dark mossy turf roof, warm interior
+  floor, clearing/forest ground, dark hearth stone, warm emissive ember bed,
+  furniture, tree trunk, tree canopy. No material graph, no PBR, no per-frame
+  material allocation.
+- Texture path/fallback: `TextureCatalog` (Engine) is a portable registry of
+  texture ids; the renderer binds a registered texture only when the material
+  requests a known id, otherwise it falls back to base color (never a crash).
+  No material sets a `TextureId` yet; when real wood/turf/stone/ground textures
+  arrive, they drop in by setting `TextureId` (plus UVs on the shared
+  primitives) without touching layout, collision, or gameplay. No UVs were
+  needed this phase (texture support is not yet exercised), so the existing
+  zero-UV `VertexPositionNormalTexture` path is unchanged.
+- Exterior lighting policy: a centralized immutable `EnvironmentLighting`
+  (Engine) — cool dim ambient `(0.20, 0.23, 0.28)`, one subdued cool key
+  `(0.62, 0.70, 0.82)` from above-side, one faint cool fill, third slot
+  disabled — applied to the existing `BasicEffect`. No custom shader.
+- Interior warmth strategy: no fake point lights. Warmth comes from warmer
+  interior material colors (floor, furniture) plus the emissive hearth, so the
+  home reads warm against the cold forest using only `BasicEffect` diffuse +
+  emissive.
+- Hearth treatment: the ember bed is the one emissive surface — a restrained
+  warm orange `(240, 104, 32)` added on top of a dark base, inside the dark
+  stone rim. No particles, smoke, or flicker.
+- Forest/clearing contrast: the clearing ground is a lighter muted moss
+  green-brown; the deep forest floor is darker and cooler. Layout, collision,
+  and the 24-tree ring are spatially identical to Phase 2L.
+- Normals: the existing `MeshFactory` primitives already carried correct
+  unit normals (box faces, ground +Y, prism caps/slopes); orientation tests
+  were added. No mesh infrastructure was rebuilt.
+- Diagnostics: one-time startup line reports static object count, material
+  count, textured material count, texture binds/fallbacks, and the active
+  lighting policy. No per-frame logging.
+- Regression guards: the player collision set (34) and camera obstruction set
+  (32) are asserted unchanged, as are longhouse dimensions, spawn, scene
+  composition, and all traversal/camera behavior. All Phase 2E–2Q tests
+  remain valid (628 total pass, including 28 new material/lighting/normal
+  tests).
+- Runtime validation: the real host was launched and inspected via screen
+  capture (spawn exterior, interior, hearth, orbit). The longhouse exterior
+  reads as a dark but visible silhouette; the interior is warm and readable;
+  the hearth is a clear focal point. A human visual pass is still recommended.
+
+Still placeholder (replace first when real assets arrive): the flat emissive
+ember bed (no fire geometry), the untextured timber/turf/stone/ground surfaces,
+and the blockout trees. What looks most obviously placeholder: every surface
+is flat color — the first real wood/turf/ground textures will change the
+scene more than any further lighting work.
+
 ## Deferred work
 
 Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation state machines/blend trees, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. Phase 2F covered short crossfades and turn-rate smoothing; Phase 2G added the third-person follow/orbit camera; Phase 2H made the camera continuously look at Erika and aligned her spawn facing with initial forward movement; Phase 2I added acceleration/deceleration movement response (speed envelope scaling the single authored root-motion authority); Phase 2J added stationary turn-in-place (a gated 45°-enter/15°-release procedural pivot that holds idle and zero translational target until the heading error is resolved, then releases through the existing speed envelope); Phase 2K synchronized the visible locomotion playback rate with the Phase 2I speed envelope through a separate pose clock, bounding the run→walk raw rate at 2×. Phase 2L added the first environment blockout (Viking longhouse in a forest clearing) as static vertex-colored geometry owned by a centralized portable layout. Phase 2M added the static camera-obstruction pass (32 oriented boxes, spherecast pull-in, smooth outward recovery) on the real environment geometry. Phase 2N added static flat-XZ player collision and wall sliding against the longhouse shell and tree trunks (29 blockers, bounded sweep-and-slide), constraining the authored root-motion displacement without a second movement authority. Phase 2O extended that set to the longhouse interior (solid hearth, benches, and tables; 34 blockers total) using the same architecture, and verified the interior stays navigable. With the environment collision set now covering the shell, trees, and furnishings, the most obvious remaining locomotion/collision defect is foot sliding while blocked, so the smallest logical next step is a blocked-movement locomotion response (with camera corner-snapping/character fading as the next environment-polish candidates after that), camera corner-snapping/character fading, stride warping/foot IK to remove the remaining capped run→walk slide, and authored turn-in-place clips. Final textures/models are intentionally deferred.

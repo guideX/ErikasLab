@@ -4,7 +4,7 @@ using ErikasLab.Engine;
 namespace ErikasLab.Game;
 
 /// <summary>
-/// Phase 2L environment blockout builder. Owns the static world geometry only
+/// Phase 2L/2R environment builder. Owns the static world geometry only
 /// (ground, clearing, forest ring, longhouse shell, timber structure, and
 /// interior masses); Erika's position/locomotion/camera stay in
 /// <see cref="GameSession"/> and the renderer only consumes the resulting
@@ -12,46 +12,58 @@ namespace ErikasLab.Game;
 /// <see cref="LonghouseLayout"/> so no raw coordinates are scattered here.
 ///
 /// The geometry is built once at session construction and never rebuilt, so
-/// there are no per-frame allocations or draw-call churn. Materials are simple
-/// vertex colors (one shared unit mesh per palette entry), which the renderer
-/// already consumes; this is placeholder art, not final environment art.
+/// there are no per-frame allocations or draw-call churn. Phase 2R assigns one
+/// shared <see cref="StaticMaterial"/> per environment category (see
+/// <see cref="EnvironmentMaterials"/>) to every object; the shared unit
+/// primitives keep vertex colors mirroring their material base color so the
+/// vertex-color data stays consistent with the material path. This is
+/// placeholder material treatment, not final environment art.
 /// </summary>
 public static class EnvironmentFactory
 {
-    /// <summary>Build the complete Phase 2L home-area scene.</summary>
+    /// <summary>Build the complete Phase 2L/2R home-area scene.</summary>
     public static Scene Create()
     {
         var scene = new Scene();
 
-        // One shared unit primitive per palette entry: every instance reuses the
-        // same MeshData (and therefore one GPU buffer in the renderer cache) and
-        // only differs by its Transform.
-        var timberMesh = MeshFactory.CreateBox(Vector3.One, ColorRgba.Timber);
-        var wallMesh = MeshFactory.CreateBox(Vector3.One, ColorRgba.WallWood);
-        var roofMesh = MeshFactory.CreateBox(Vector3.One, ColorRgba.Roof);
-        var stoneMesh = MeshFactory.CreateBox(Vector3.One, ColorRgba.Stone);
-        var hearthBedMesh = MeshFactory.CreateBox(Vector3.One, ColorRgba.HearthBed);
-        var furnitureMesh = MeshFactory.CreateBox(Vector3.One, ColorRgba.Furniture);
-        var trunkMesh = MeshFactory.CreateBox(Vector3.One, ColorRgba.TreeTrunk);
-        var canopyMesh = MeshFactory.CreateBox(Vector3.One, ColorRgba.TreeCanopy);
-        var gableMesh = MeshFactory.CreateTriangularPrism(Vector3.One, ColorRgba.WallWood);
+        // One shared unit primitive per material category: every instance
+        // reuses the same MeshData (and therefore one GPU buffer in the
+        // renderer cache) and only differs by its Transform and Material.
+        var timber = EnvironmentMaterials.StructuralTimber;
+        var wall = EnvironmentMaterials.WallPlanks;
+        var roof = EnvironmentMaterials.RoofTurf;
+        var stone = EnvironmentMaterials.HearthStone;
+        var embers = EnvironmentMaterials.HearthEmbers;
+        var furniture = EnvironmentMaterials.Furniture;
+        var trunk = EnvironmentMaterials.TreeTrunk;
+        var canopy = EnvironmentMaterials.TreeCanopy;
 
-        var forestGroundMesh = MeshFactory.CreateGroundPlane(LonghouseLayout.ForestGroundSize, ColorRgba.ForestGround);
-        var clearingMesh = MeshFactory.CreateGroundPlane(LonghouseLayout.ClearingSize, ColorRgba.Clearing);
+        var timberMesh = MeshFactory.CreateBox(Vector3.One, timber.BaseColor);
+        var wallMesh = MeshFactory.CreateBox(Vector3.One, wall.BaseColor);
+        var roofMesh = MeshFactory.CreateBox(Vector3.One, roof.BaseColor);
+        var stoneMesh = MeshFactory.CreateBox(Vector3.One, stone.BaseColor);
+        var hearthBedMesh = MeshFactory.CreateBox(Vector3.One, embers.BaseColor);
+        var furnitureMesh = MeshFactory.CreateBox(Vector3.One, furniture.BaseColor);
+        var trunkMesh = MeshFactory.CreateBox(Vector3.One, trunk.BaseColor);
+        var canopyMesh = MeshFactory.CreateBox(Vector3.One, canopy.BaseColor);
+        var gableMesh = MeshFactory.CreateTriangularPrism(Vector3.One, wall.BaseColor);
+
+        var forestGroundMesh = MeshFactory.CreateGroundPlane(LonghouseLayout.ForestGroundSize, EnvironmentMaterials.ForestGround.BaseColor);
+        var clearingMesh = MeshFactory.CreateGroundPlane(LonghouseLayout.ClearingSize, EnvironmentMaterials.ClearingGround.BaseColor);
         var floorMesh = MeshFactory.CreateGroundRectangle(
             LonghouseLayout.Width - 2f * LonghouseLayout.FloorMargin,
             LonghouseLayout.Length - 2f * LonghouseLayout.FloorMargin,
-            ColorRgba.FloorWood);
+            EnvironmentMaterials.InteriorFloor.BaseColor);
 
-        AddGrounds(scene, forestGroundMesh, clearingMesh, floorMesh);
-        AddWalls(scene, wallMesh);
-        AddGableEnds(scene, gableMesh);
-        AddRoof(scene, roofMesh, timberMesh);
-        AddTimberStructure(scene, timberMesh);
-        AddHearth(scene, stoneMesh, hearthBedMesh);
-        AddFurnishings(scene, furnitureMesh);
-        AddDoorFrame(scene, timberMesh);
-        AddForest(scene, trunkMesh, canopyMesh);
+        AddGrounds(scene, forestGroundMesh, EnvironmentMaterials.ForestGround, clearingMesh, EnvironmentMaterials.ClearingGround, floorMesh, EnvironmentMaterials.InteriorFloor);
+        AddWalls(scene, wallMesh, wall);
+        AddGableEnds(scene, gableMesh, wall);
+        AddRoof(scene, roofMesh, roof, timberMesh, timber);
+        AddTimberStructure(scene, timberMesh, timber);
+        AddHearth(scene, stoneMesh, stone, hearthBedMesh, embers);
+        AddFurnishings(scene, furnitureMesh, furniture);
+        AddDoorFrame(scene, timberMesh, timber);
+        AddForest(scene, trunkMesh, trunk, canopyMesh, canopy);
 
         return scene;
     }
@@ -250,23 +262,26 @@ public static class EnvironmentFactory
         return new PlayerCollisionSet(boxes.ToArray());
     }
 
-    private static void AddGrounds(Scene scene, MeshData forestGround, MeshData clearing, MeshData floor)
+    private static void AddGrounds(Scene scene, MeshData forestGround, StaticMaterial forest, MeshData clearing, StaticMaterial clearingMaterial, MeshData floor, StaticMaterial floorMaterial)
     {
         scene.Add(new SceneObject(
             "ForestGround",
             forestGround,
-            new Transform(new Vector3(0f, LonghouseLayout.ForestGroundY, 0f), Quaternion.Identity, Vector3.One)));
+            new Transform(new Vector3(0f, LonghouseLayout.ForestGroundY, 0f), Quaternion.Identity, Vector3.One),
+            forest));
         scene.Add(new SceneObject(
             "Clearing",
             clearing,
-            new Transform(new Vector3(0f, 0f, 0f), Quaternion.Identity, Vector3.One)));
+            new Transform(new Vector3(0f, 0f, 0f), Quaternion.Identity, Vector3.One),
+            clearingMaterial));
         scene.Add(new SceneObject(
             "LonghouseFloor",
             floor,
-            new Transform(new Vector3(0f, LonghouseLayout.FloorTopY, 0f), Quaternion.Identity, Vector3.One)));
+            new Transform(new Vector3(0f, LonghouseLayout.FloorTopY, 0f), Quaternion.Identity, Vector3.One),
+            floorMaterial));
     }
 
-    private static void AddWalls(Scene scene, MeshData wall)
+    private static void AddWalls(Scene scene, MeshData wall, StaticMaterial material)
     {
         var halfWidth = LonghouseLayout.HalfWidth;
         var height = LonghouseLayout.WallHeight;
@@ -274,9 +289,9 @@ public static class EnvironmentFactory
         var length = LonghouseLayout.Length;
         var y = height / 2f;
 
-        AddBox(scene, "Wall.Left", wall, new Vector3(-halfWidth, y, 0f), new Vector3(thickness, height, length));
-        AddBox(scene, "Wall.Right", wall, new Vector3(halfWidth, y, 0f), new Vector3(thickness, height, length));
-        AddBox(scene, "Wall.Rear", wall, new Vector3(0f, y, LonghouseLayout.RearZ), new Vector3(LonghouseLayout.Width, height, thickness));
+        AddBox(scene, "Wall.Left", wall, new Vector3(-halfWidth, y, 0f), new Vector3(thickness, height, length), material);
+        AddBox(scene, "Wall.Right", wall, new Vector3(halfWidth, y, 0f), new Vector3(thickness, height, length), material);
+        AddBox(scene, "Wall.Rear", wall, new Vector3(0f, y, LonghouseLayout.RearZ), new Vector3(LonghouseLayout.Width, height, thickness), material);
 
         // Front end wall with a genuine open doorway: two flanking segments plus
         // a lintel above the opening, leaving the opening itself unrendered.
@@ -284,28 +299,30 @@ public static class EnvironmentFactory
         var segmentWidth = halfWidth - doorHalf;
         var segmentCenterX = doorHalf + segmentWidth / 2f;
         var frontZ = LonghouseLayout.FrontZ;
-        AddBox(scene, "Wall.Front.Left", wall, new Vector3(-segmentCenterX, y, frontZ), new Vector3(segmentWidth, height, thickness));
-        AddBox(scene, "Wall.Front.Right", wall, new Vector3(segmentCenterX, y, frontZ), new Vector3(segmentWidth, height, thickness));
+        AddBox(scene, "Wall.Front.Left", wall, new Vector3(-segmentCenterX, y, frontZ), new Vector3(segmentWidth, height, thickness), material);
+        AddBox(scene, "Wall.Front.Right", wall, new Vector3(segmentCenterX, y, frontZ), new Vector3(segmentWidth, height, thickness), material);
 
         var lintelHeight = LonghouseLayout.WallHeight - LonghouseLayout.DoorHeight;
         var lintelCenterY = LonghouseLayout.DoorHeight + lintelHeight / 2f;
-        AddBox(scene, "Wall.Front.Lintel", wall, new Vector3(0f, lintelCenterY, frontZ), new Vector3(LonghouseLayout.DoorWidth, lintelHeight, thickness));
+        AddBox(scene, "Wall.Front.Lintel", wall, new Vector3(0f, lintelCenterY, frontZ), new Vector3(LonghouseLayout.DoorWidth, lintelHeight, thickness), material);
     }
 
-    private static void AddGableEnds(Scene scene, MeshData gable)
+    private static void AddGableEnds(Scene scene, MeshData gable, StaticMaterial material)
     {
         var size = new Vector3(2f * LonghouseLayout.RoofHalfSpanX, LonghouseLayout.RoofRise, LonghouseLayout.WallThickness);
         scene.Add(new SceneObject(
             "Gable.Front",
             gable,
-            new Transform(new Vector3(0f, LonghouseLayout.WallHeight, LonghouseLayout.FrontZ), Quaternion.Identity, size)));
+            new Transform(new Vector3(0f, LonghouseLayout.WallHeight, LonghouseLayout.FrontZ), Quaternion.Identity, size),
+            material));
         scene.Add(new SceneObject(
             "Gable.Rear",
             gable,
-            new Transform(new Vector3(0f, LonghouseLayout.WallHeight, LonghouseLayout.RearZ), Quaternion.Identity, size)));
+            new Transform(new Vector3(0f, LonghouseLayout.WallHeight, LonghouseLayout.RearZ), Quaternion.Identity, size),
+            material));
     }
 
-    private static void AddRoof(Scene scene, MeshData roof, MeshData timber)
+    private static void AddRoof(Scene scene, MeshData roof, StaticMaterial roofMaterial, MeshData timber, StaticMaterial timberMaterial)
     {
         var size = new Vector3(LonghouseLayout.RoofSlopeLength, LonghouseLayout.RoofThickness, LonghouseLayout.RoofLengthZ);
         var centerX = LonghouseLayout.RoofHalfSpanX / 2f;
@@ -314,14 +331,14 @@ public static class EnvironmentFactory
 
         var leftYaw = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, LonghouseLayout.RoofSlopeAngleRadians);
         var rightYaw = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, MathF.PI - LonghouseLayout.RoofSlopeAngleRadians);
-        scene.Add(new SceneObject("Roof.Left", roof, new Transform(new Vector3(-centerX, centerY, z), leftYaw, size)));
-        scene.Add(new SceneObject("Roof.Right", roof, new Transform(new Vector3(centerX, centerY, z), rightYaw, size)));
+        scene.Add(new SceneObject("Roof.Left", roof, new Transform(new Vector3(-centerX, centerY, z), leftYaw, size), roofMaterial));
+        scene.Add(new SceneObject("Roof.Right", roof, new Transform(new Vector3(centerX, centerY, z), rightYaw, size), roofMaterial));
 
         var ridgeSize = LonghouseLayout.BeamSize * 1.5f;
-        AddBox(scene, "Roof.Ridge", timber, new Vector3(0f, LonghouseLayout.RidgeHeight, z), new Vector3(ridgeSize, ridgeSize, LonghouseLayout.RoofLengthZ));
+        AddBox(scene, "Roof.Ridge", timber, new Vector3(0f, LonghouseLayout.RidgeHeight, z), new Vector3(ridgeSize, ridgeSize, LonghouseLayout.RoofLengthZ), timberMaterial);
     }
 
-    private static void AddTimberStructure(Scene scene, MeshData timber)
+    private static void AddTimberStructure(Scene scene, MeshData timber, StaticMaterial material)
     {
         var postSize = LonghouseLayout.PostSize;
         var height = LonghouseLayout.WallHeight;
@@ -338,7 +355,7 @@ public static class EnvironmentFactory
         for (var i = 0; i < corners.Length; i++)
         {
             var (x, z) = corners[i];
-            AddBox(scene, $"Post.Corner.{i:00}", timber, new Vector3(x, y, z), new Vector3(postSize, height, postSize));
+            AddBox(scene, $"Post.Corner.{i:00}", timber, new Vector3(x, y, z), new Vector3(postSize, height, postSize), material);
         }
 
         // Repeated side-wall posts plus tie beams and rafters at the same
@@ -353,15 +370,15 @@ public static class EnvironmentFactory
         for (var i = 0; i < LonghouseLayout.SidePostCount; i++)
         {
             var z = LonghouseLayout.SidePostZ(i);
-            AddBox(scene, $"Post.Side.Left.{i:00}", timber, new Vector3(-LonghouseLayout.HalfWidth, y, z), new Vector3(postSize, height, postSize));
-            AddBox(scene, $"Post.Side.Right.{i:00}", timber, new Vector3(LonghouseLayout.HalfWidth, y, z), new Vector3(postSize, height, postSize));
-            AddBox(scene, $"Beam.Tie.{i:00}", timber, new Vector3(0f, tieY, z), new Vector3(LonghouseLayout.Width, LonghouseLayout.BeamSize, LonghouseLayout.BeamSize));
-            scene.Add(new SceneObject($"Rafter.Left.{i:00}", timber, new Transform(new Vector3(-rafterCenterX, rafterCenterY, z), rafterLeft, rafterSize)));
-            scene.Add(new SceneObject($"Rafter.Right.{i:00}", timber, new Transform(new Vector3(rafterCenterX, rafterCenterY, z), rafterRight, rafterSize)));
+            AddBox(scene, $"Post.Side.Left.{i:00}", timber, new Vector3(-LonghouseLayout.HalfWidth, y, z), new Vector3(postSize, height, postSize), material);
+            AddBox(scene, $"Post.Side.Right.{i:00}", timber, new Vector3(LonghouseLayout.HalfWidth, y, z), new Vector3(postSize, height, postSize), material);
+            AddBox(scene, $"Beam.Tie.{i:00}", timber, new Vector3(0f, tieY, z), new Vector3(LonghouseLayout.Width, LonghouseLayout.BeamSize, LonghouseLayout.BeamSize), material);
+            scene.Add(new SceneObject($"Rafter.Left.{i:00}", timber, new Transform(new Vector3(-rafterCenterX, rafterCenterY, z), rafterLeft, rafterSize), material));
+            scene.Add(new SceneObject($"Rafter.Right.{i:00}", timber, new Transform(new Vector3(rafterCenterX, rafterCenterY, z), rafterRight, rafterSize), material));
         }
     }
 
-    private static void AddHearth(Scene scene, MeshData stone, MeshData bed)
+    private static void AddHearth(Scene scene, MeshData stone, StaticMaterial stoneMaterial, MeshData bed, StaticMaterial embersMaterial)
     {
         var centerZ = LonghouseLayout.HearthCenterZ;
         var width = LonghouseLayout.HearthWidth;
@@ -375,50 +392,52 @@ public static class EnvironmentFactory
             "Hearth.Bed",
             bed,
             new Vector3(0f, LonghouseLayout.FloorTopY + 0.03f, centerZ),
-            new Vector3(width - 2f * rimThickness, 0.06f, length - 2f * rimThickness));
+            new Vector3(width - 2f * rimThickness, 0.06f, length - 2f * rimThickness),
+            embersMaterial);
 
         var sideX = width / 2f - rimThickness / 2f;
-        AddBox(scene, "Hearth.Rim.Left", stone, new Vector3(-sideX, rimY, centerZ), new Vector3(rimThickness, rimHeight, length));
-        AddBox(scene, "Hearth.Rim.Right", stone, new Vector3(sideX, rimY, centerZ), new Vector3(rimThickness, rimHeight, length));
+        AddBox(scene, "Hearth.Rim.Left", stone, new Vector3(-sideX, rimY, centerZ), new Vector3(rimThickness, rimHeight, length), stoneMaterial);
+        AddBox(scene, "Hearth.Rim.Right", stone, new Vector3(sideX, rimY, centerZ), new Vector3(rimThickness, rimHeight, length), stoneMaterial);
 
         var endZ = length / 2f - rimThickness / 2f;
-        AddBox(scene, "Hearth.Rim.Front", stone, new Vector3(0f, rimY, centerZ + endZ), new Vector3(width - 2f * rimThickness, rimHeight, rimThickness));
-        AddBox(scene, "Hearth.Rim.Rear", stone, new Vector3(0f, rimY, centerZ - endZ), new Vector3(width - 2f * rimThickness, rimHeight, rimThickness));
+        AddBox(scene, "Hearth.Rim.Front", stone, new Vector3(0f, rimY, centerZ + endZ), new Vector3(width - 2f * rimThickness, rimHeight, rimThickness), stoneMaterial);
+        AddBox(scene, "Hearth.Rim.Rear", stone, new Vector3(0f, rimY, centerZ - endZ), new Vector3(width - 2f * rimThickness, rimHeight, rimThickness), stoneMaterial);
     }
 
-    private static void AddFurnishings(Scene scene, MeshData furniture)
+    private static void AddFurnishings(Scene scene, MeshData furniture, StaticMaterial material)
     {
         var benchX = LonghouseLayout.BenchCenterX;
         var benchY = LonghouseLayout.BenchHeight / 2f;
         var benchSize = new Vector3(LonghouseLayout.BenchDepth, LonghouseLayout.BenchHeight, LonghouseLayout.BenchLength);
-        AddBox(scene, "Bench.Left", furniture, new Vector3(-benchX, benchY, 0f), benchSize);
-        AddBox(scene, "Bench.Right", furniture, new Vector3(benchX, benchY, 0f), benchSize);
+        AddBox(scene, "Bench.Left", furniture, new Vector3(-benchX, benchY, 0f), benchSize, material);
+        AddBox(scene, "Bench.Right", furniture, new Vector3(benchX, benchY, 0f), benchSize, material);
 
         var tableY = LonghouseLayout.TableHeight / 2f;
         var tableSize = new Vector3(LonghouseLayout.TableWidth, LonghouseLayout.TableHeight, LonghouseLayout.TableLength);
         var tableX = LonghouseLayout.TableCenterX;
         var tableZ = LonghouseLayout.TableCenterZ;
-        AddBox(scene, "Table.Right", furniture, new Vector3(tableX, tableY, tableZ), tableSize);
-        AddBox(scene, "Table.Left", furniture, new Vector3(-tableX, tableY, tableZ), tableSize);
+        AddBox(scene, "Table.Right", furniture, new Vector3(tableX, tableY, tableZ), tableSize, material);
+        AddBox(scene, "Table.Left", furniture, new Vector3(-tableX, tableY, tableZ), tableSize, material);
     }
 
-    private static void AddDoorFrame(Scene scene, MeshData timber)
+    private static void AddDoorFrame(Scene scene, MeshData timber, StaticMaterial material)
     {
         var frameX = LonghouseLayout.DoorWidth / 2f + LonghouseLayout.PostSize / 2f;
         var frameHeight = LonghouseLayout.DoorHeight + 0.2f;
         var frontZ = LonghouseLayout.FrontZ;
         var size = new Vector3(LonghouseLayout.PostSize, frameHeight, LonghouseLayout.PostSize);
-        AddBox(scene, "Door.Frame.Left", timber, new Vector3(-frameX, frameHeight / 2f, frontZ), size);
-        AddBox(scene, "Door.Frame.Right", timber, new Vector3(frameX, frameHeight / 2f, frontZ), size);
+        AddBox(scene, "Door.Frame.Left", timber, new Vector3(-frameX, frameHeight / 2f, frontZ), size, material);
+        AddBox(scene, "Door.Frame.Right", timber, new Vector3(frameX, frameHeight / 2f, frontZ), size, material);
         AddBox(
             scene,
             "Door.Frame.Header",
             timber,
             new Vector3(0f, LonghouseLayout.DoorHeight + 0.1f, frontZ),
-            new Vector3(LonghouseLayout.DoorWidth + 2f * LonghouseLayout.PostSize, LonghouseLayout.BeamSize, LonghouseLayout.PostSize));
+            new Vector3(LonghouseLayout.DoorWidth + 2f * LonghouseLayout.PostSize, LonghouseLayout.BeamSize, LonghouseLayout.PostSize),
+            material);
     }
 
-    private static void AddForest(Scene scene, MeshData trunk, MeshData canopy)
+    private static void AddForest(Scene scene, MeshData trunk, StaticMaterial trunkMaterial, MeshData canopy, StaticMaterial canopyMaterial)
     {
         var tiers = new (float Width, float Height, float CenterY)[]
         {
@@ -437,7 +456,8 @@ public static class EnvironmentFactory
             scene.Add(new SceneObject(
                 $"Tree.{i:00}.Trunk",
                 trunk,
-                new Transform(position + new Vector3(0f, trunkSize.Y / 2f, 0f), rotation, trunkSize)));
+                new Transform(position + new Vector3(0f, trunkSize.Y / 2f, 0f), rotation, trunkSize),
+                trunkMaterial));
 
             for (var t = 0; t < tiers.Length; t++)
             {
@@ -446,13 +466,14 @@ public static class EnvironmentFactory
                 scene.Add(new SceneObject(
                     $"Tree.{i:00}.Canopy.{t}",
                     canopy,
-                    new Transform(position + new Vector3(0f, tier.CenterY * scale, 0f), rotation, tierSize)));
+                    new Transform(position + new Vector3(0f, tier.CenterY * scale, 0f), rotation, tierSize),
+                    canopyMaterial));
             }
         }
     }
 
-    private static void AddBox(Scene scene, string name, MeshData unitMesh, Vector3 center, Vector3 size)
+    private static void AddBox(Scene scene, string name, MeshData unitMesh, Vector3 center, Vector3 size, StaticMaterial material)
     {
-        scene.Add(new SceneObject(name, unitMesh, new Transform(center, Quaternion.Identity, size)));
+        scene.Add(new SceneObject(name, unitMesh, new Transform(center, Quaternion.Identity, size), material));
     }
 }
