@@ -1,3 +1,4 @@
+using System.IO;
 using System.Runtime.InteropServices;
 using ErikasLab.Engine;
 using ErikasLab.Game;
@@ -29,14 +30,14 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
 
         Content.RootDirectory = "Content";
         IsMouseVisible = false;
-        Window.Title = "Erika's Lab - Phase 2R";
+        Window.Title = "Erika's Lab - Phase 2S";
         Window.AllowUserResizing = true;
         Window.ClientSizeChanged += OnClientSizeChanged;
     }
 
     protected override void Initialize()
     {
-        Console.WriteLine("Erika's Lab | Phase 2R | initializing");
+        Console.WriteLine("Erika's Lab | Phase 2S | initializing");
         Console.WriteLine($"Runtime: {RuntimeInformation.FrameworkDescription} ({RuntimeInformation.ProcessArchitecture})");
         base.Initialize();
     }
@@ -46,6 +47,7 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
         _modelLibrary = new ModelLibrary(Content);
         _modelRenderer = new AnimatedModelRenderer(_modelLibrary, GraphicsDevice);
         _renderer = new MonoGameRenderer(GraphicsDevice, _modelRenderer);
+        LoadEnvironmentTextures();
         _inputSource = new MonoGameInputSource(Window);
         _gameSession = new GameSession();
         _gameSession.Resize(GraphicsDevice.Viewport.Width, GraphicsDevice.Viewport.Height);
@@ -107,6 +109,63 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
             "Locomotion playback policy: separate visual pose clock (root motion independent); " +
             $"rate = speed / authoredSpeed, bounds [{LocomotionPlaybackRates.MinimumRate}, {LocomotionPlaybackRates.MaximumRate}], idle 1x");
         Console.WriteLine("Controls: W/A/S/D move (Shift sprint, camera-relative), mouse or arrow keys orbit, 1/2/3 diagnostic idle/walk/run, Escape exits");
+    }
+
+    /// <summary>
+    /// Phase 2S environment-texture drop-in path. Loads every
+    /// <c>*.png</c> under <c>Content/environment/</c> once at startup and
+    /// registers each file under <c>environment/{file name without
+    /// extension}</c>, matching <see cref="EnvironmentTextureIds"/>. A
+    /// missing directory, an unreadable file, or a load failure is logged and
+    /// otherwise ignored: the affected material simply keeps rendering through
+    /// its Phase 2R base color (the renderer's texture-fallback contract), so
+    /// a partial or empty texture set can never crash the game or blank the
+    /// scene. No per-frame disk access; the renderer owns texture lifetime.
+    /// </summary>
+    private void LoadEnvironmentTextures()
+    {
+        if (_renderer is null)
+        {
+            return;
+        }
+
+        var directory = Path.Combine(Content.RootDirectory, "environment");
+        if (!Directory.Exists(directory))
+        {
+            Console.WriteLine(
+                "Environment textures: none found (Content/environment absent); " +
+                "environment renders via Phase 2R base colors");
+            return;
+        }
+
+        var loaded = 0;
+        var failed = 0;
+        foreach (var file in Directory.GetFiles(directory, "*.png").OrderBy(path => path, StringComparer.Ordinal))
+        {
+            var id = "environment/" + Path.GetFileNameWithoutExtension(file);
+            try
+            {
+                using var stream = File.OpenRead(file);
+                var texture = Texture2D.FromStream(GraphicsDevice, stream);
+                if (texture.Width <= 0 || texture.Height <= 0)
+                {
+                    texture.Dispose();
+                    throw new InvalidDataException($"Texture {id} has empty dimensions.");
+                }
+
+                _renderer.RegisterTexture(id, texture);
+                loaded++;
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                Console.WriteLine($"Environment texture '{id}' failed to load and will use base color: {ex.Message}");
+            }
+        }
+
+        Console.WriteLine(
+            $"Environment textures: {loaded} loaded, {failed} failed " +
+            $"(ids match EnvironmentTextureIds; unregistered ids fall back to base color)");
     }
 
     protected override void Update(GameTime gameTime)

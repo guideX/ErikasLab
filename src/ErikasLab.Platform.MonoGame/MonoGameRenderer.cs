@@ -10,8 +10,10 @@ internal sealed class MonoGameRenderer : IRenderer
     private readonly GraphicsDevice _graphicsDevice;
     private readonly BasicEffect _effect;
     private readonly RasterizerState _rasterizerState;
+    private readonly SamplerState _wrapSampler;
     private readonly AnimatedModelRenderer? _modelRenderer;
     private readonly Dictionary<MeshData, GpuMesh> _meshCache = new();
+    private readonly Dictionary<UvVariantKey, MeshData> _uvVariantCache = new();
     private readonly Dictionary<string, Texture2D> _textureBindings = new();
     private readonly TextureCatalog _textureCatalog;
     private bool _disposed;
@@ -40,6 +42,13 @@ internal sealed class MonoGameRenderer : IRenderer
         {
             CullMode = CullMode.CullCounterClockwiseFace,
             FillMode = FillMode.Solid,
+        };
+
+        _wrapSampler = new SamplerState
+        {
+            Filter = TextureFilter.Linear,
+            AddressU = TextureAddressMode.Wrap,
+            AddressV = TextureAddressMode.Wrap,
         };
 
         BackendName = "MonoGame WindowsDX";
@@ -109,6 +118,7 @@ internal sealed class MonoGameRenderer : IRenderer
         _graphicsDevice.DepthStencilState = DepthStencilState.Default;
         _graphicsDevice.RasterizerState = _rasterizerState;
         _graphicsDevice.BlendState = BlendState.Opaque;
+        _graphicsDevice.SamplerStates[0] = _wrapSampler;
 
         _effect.View = ToMonoGameMatrix(camera.ViewMatrix);
         _effect.Projection = ToMonoGameMatrix(camera.ProjectionMatrix);
@@ -118,12 +128,30 @@ internal sealed class MonoGameRenderer : IRenderer
 
         foreach (var sceneObject in scene.Objects)
         {
-            var gpuMesh = GetOrCreateMesh(sceneObject.Mesh);
+            var material = sceneObject.Material;
+            var mesh = sceneObject.Mesh;
+            var textureBound = false;
+            if (material.TextureEnabled
+                && _textureCatalog.Contains(material.TextureId!)
+                && _textureBindings.TryGetValue(material.TextureId!, out var texture))
+            {
+                // World-repeat UVs: the shared primitive's baked UVs are scaled
+                // by this instance's transform scale and the material texture
+                // scale, cached per distinct combination (created once, never
+                // per frame). The base color stays bound as the BasicEffect
+                // diffuse tint around the texture.
+                mesh = GetOrCreateVariantMesh(sceneObject, material);
+                _effect.Texture = texture;
+                _effect.TextureEnabled = true;
+                textureBound = true;
+                TextureBindCount++;
+            }
+
+            var gpuMesh = GetOrCreateMesh(mesh);
             _graphicsDevice.SetVertexBuffer(gpuMesh.VertexBuffer);
             _graphicsDevice.Indices = gpuMesh.IndexBuffer;
             _effect.World = ToMonoGameMatrix(sceneObject.Transform.WorldMatrix);
 
-            var material = sceneObject.Material;
             materials.Add(material);
             if (material.TextureEnabled)
             {
@@ -132,16 +160,8 @@ internal sealed class MonoGameRenderer : IRenderer
 
             _effect.DiffuseColor = ToVector3(material.BaseColor);
             _effect.EmissiveColor = ToVector3(material.EmissiveColor);
-            _effect.TextureEnabled = false;
-            if (material.TextureEnabled
-                && _textureCatalog.Contains(material.TextureId!)
-                && _textureBindings.TryGetValue(material.TextureId!, out var texture))
-            {
-                _effect.Texture = texture;
-                _effect.TextureEnabled = true;
-                TextureBindCount++;
-            }
-            else if (material.TextureEnabled)
+            _effect.TextureEnabled = textureBound;
+            if (material.TextureEnabled && !textureBound)
             {
                 TextureFallbackCount++;
             }
@@ -178,10 +198,34 @@ internal sealed class MonoGameRenderer : IRenderer
         }
 
         _meshCache.Clear();
+        _uvVariantCache.Clear();
         _textureBindings.Clear();
         _rasterizerState.Dispose();
+        _wrapSampler.Dispose();
         _effect.Dispose();
         _disposed = true;
+    }
+
+    /// <summary>
+    /// Phase 2S world-repeat UV variant lookup. The returned mesh shares the
+    /// primitive's positions/normals/colors/indices but carries UVs scaled to
+    /// world repeats for this instance's transform scale and material texture
+    /// scale. Keyed by (base mesh, world scale, texture scale) so identical
+    /// instances share one variant; created on first use only (the scene is
+    /// static), never per frame, and the GPU buffer cache deduplicates the
+    /// underlying vertex/index buffers per variant.
+    /// </summary>
+    private MeshData GetOrCreateVariantMesh(SceneObject sceneObject, StaticMaterial material)
+    {
+        var key = new UvVariantKey(sceneObject.Mesh, sceneObject.Transform.Scale, material.TextureScale);
+        if (_uvVariantCache.TryGetValue(key, out var variant))
+        {
+            return variant;
+        }
+
+        variant = MeshFactory.ApplyUvScale(sceneObject.Mesh, key.WorldScale, key.TextureScale);
+        _uvVariantCache.Add(key, variant);
+        return variant;
     }
 
     private void ApplyLighting(EnvironmentLighting lighting)
@@ -232,6 +276,9 @@ internal sealed class MonoGameRenderer : IRenderer
             value.M21, value.M22, value.M23, value.M24,
             value.M31, value.M32, value.M33, value.M34,
             value.M41, value.M42, value.M43, value.M44);
+
+    /// <summary>Phase 2S UV-variant cache key: base mesh (reference identity) + the instance world scale + material texture scale.</summary>
+    private readonly record struct UvVariantKey(MeshData Mesh, Numerics.Vector3 WorldScale, Numerics.Vector2 TextureScale);
 
     private sealed class GpuMesh : IDisposable
     {

@@ -679,9 +679,93 @@ and the blockout trees. What looks most obviously placeholder: every surface
 is flat color — the first real wood/turf/ground textures will change the
 scene more than any further lighting work.
 
+## Environment UVs and texture rendering (Phase 2S)
+
+The static environment is now UV-capable end to end: geometry carries
+deterministic planar UVs, materials carry ready-to-fill texture slots, and the
+renderer binds real GPU textures with world-scale tiling and a safe base-color
+fallback. This is a texture-integration infrastructure pass, not final art.
+
+- Asset audit result: **Path B** — the repository still ships no environment
+  textures (only git-ignored Erika character assets, which are never used as
+  environment textures). The complete pipeline is built and validated, the
+  Phase 2R colors are preserved as the fallback, and texture slots are
+  documented and ready for asset drop-in. No fake assets were generated.
+- UV architecture: `MeshVertex` (Engine) now carries a `TexCoord`.
+  `MeshFactory` bakes deterministic planar UVs into every primitive — the
+  shared unit box bakes unit-normalized per-face UVs (side faces run v along
+  local +Y, so all axis-aligned walls share one world-vertical orientation;
+  top/bottom faces use the two horizontal axes), the triangular prism bakes
+  cap UVs with v along local Y and slope/bottom UVs with u along the slope run
+  and v along the extrusion (roof texture maps along the pitched surface), and
+  the fixed-size ground planes bake UVs in local meters (u = x, v = z). No
+  atlasing, no unique unwraps, no per-frame UV work.
+- Texture-scale convention: `StaticMaterial.TextureScale` = **repeats per
+  world meter**. The renderer completes the mapping per instance:
+  `effectiveUV = bakedUV × (transform axis scale × TextureScale)` via
+  `MeshFactory.ApplyUvScale`, so a 16 m wall visibly repeats plank detail 16
+  times at scale 1, and the 140 m forest floor tiles instead of stretching one
+  image across the world. Rotated primitives (roof slabs, rafters) tile along
+  their own local surface axes, which is exactly the desired
+  surface-aligned behavior.
+- Mesh sharing and UV scale: the shared unit-mesh + transformed-instance
+  architecture is preserved. The renderer caches UV variants keyed by
+  (base mesh, world scale, texture scale) — created once per distinct
+  combination (the scene is static), never per frame — and the existing GPU
+  mesh cache deduplicates vertex/index buffers per variant. Untextured
+  objects keep exactly one GPU mesh per shared primitive, as in Phase 2R.
+- Texture loading/cache path: the MonoGame host loads every `*.png` under
+  `Content/environment/` once at startup and registers each file under
+  `environment/{file name without extension}` (matching
+  `EnvironmentTextureIds`, Game). Textures load once, are cached by the
+  renderer, and are disposed with it; there is no per-frame disk access, no
+  per-frame texture construction, and no general asset manager. A missing
+  directory, unreadable file, or load failure is logged and otherwise ignored.
+- BasicEffect integration: when a material's `TextureId` resolves to a
+  registered texture, the renderer binds it on the existing `BasicEffect`
+  (texturing enabled, lighting preserved, the Phase 2R base color kept as
+  the diffuse tint around the texture, emissive behavior unchanged) and uses
+  a centralized wrap sampler (`SamplerState.LinearWrap`, set once per frame —
+  no per-object sampler churn). No custom shader.
+- Fallback contract: a material whose texture is missing, unknown, or failed
+  to load renders exactly through its Phase 2R base/emissive colors — no
+  crash, no magenta, no disappeared objects. Because the environment
+  materials now carry texture ids, the real host exercises this fallback path
+  for every category until real assets drop in (startup diagnostics report the
+  bind/fallback counts).
+- Material-to-texture mapping: `EnvironmentTextureIds` (Game) documents nine
+  ready-to-fill slots — structural timber, wall planks, turf roof, hearth
+  stone, interior floor, clearing ground, forest ground, furniture wood, tree
+  bark — wired into `EnvironmentMaterials` with per-category texture scales
+  (1 repeat/m for structure, 0.25 repeats/m for grounds). The ember bed stays
+  an untextured emissive focal point and the canopy stays flat color by
+  design. To connect real art, drop PNGs into `Content/environment/`; no
+  layout, collision, material, or gameplay change is needed.
+- Lighting: unchanged from the Phase 2R foundation — ambient
+  `(0.20, 0.23, 0.28)`, cool key `(0.62, 0.70, 0.82)` from
+  `(-0.45, -1, -0.35)`, fill `(0.10, 0.11, 0.14)`, third slot disabled.
+  The hearth emissive `(240, 104, 32)` is untouched and remains the focal
+  point.
+- Regression guards: all Phase 2E–2R tests remain valid (652 total pass,
+  including 24 new UV/texture-architecture tests covering UV finiteness,
+  determinism, per-face validity, ground tiling beyond `[0,1]`, roof UVs
+  after the pitched layout, world-repeat scaling, texture-id mapping,
+  fallback behavior, unchanged base colors, and mesh/index validity). Player
+  collision (34), camera obstruction (32), longhouse layout, spawn, and all
+  traversal/camera behavior are asserted unchanged.
+- Runtime validation: the real host was launched and inspected via screen
+  capture. With no environment textures present, the scene renders through
+  the Phase 2R fallback path (startup reports the texture slots as fallbacks),
+  confirming the untextured/fallback rendering is intact.
+
+Still placeholder after 2S: actual environment art remains absent — every
+surface is still flat color until real wood/turf/stone/ground textures drop
+into `Content/environment/`. The flat emissive ember bed (no fire geometry)
+and the blockout trees also remain.
+
 ## Deferred work
 
-Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation state machines/blend trees, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. Phase 2F covered short crossfades and turn-rate smoothing; Phase 2G added the third-person follow/orbit camera; Phase 2H made the camera continuously look at Erika and aligned her spawn facing with initial forward movement; Phase 2I added acceleration/deceleration movement response (speed envelope scaling the single authored root-motion authority); Phase 2J added stationary turn-in-place (a gated 45°-enter/15°-release procedural pivot that holds idle and zero translational target until the heading error is resolved, then releases through the existing speed envelope); Phase 2K synchronized the visible locomotion playback rate with the Phase 2I speed envelope through a separate pose clock, bounding the run→walk raw rate at 2×. Phase 2L added the first environment blockout (Viking longhouse in a forest clearing) as static vertex-colored geometry owned by a centralized portable layout. Phase 2M added the static camera-obstruction pass (32 oriented boxes, spherecast pull-in, smooth outward recovery) on the real environment geometry. Phase 2N added static flat-XZ player collision and wall sliding against the longhouse shell and tree trunks (29 blockers, bounded sweep-and-slide), constraining the authored root-motion displacement without a second movement authority. Phase 2O extended that set to the longhouse interior (solid hearth, benches, and tables; 34 blockers total) using the same architecture, and verified the interior stays navigable. With the environment collision set now covering the shell, trees, and furnishings, the most obvious remaining locomotion/collision defect is foot sliding while blocked, so the smallest logical next step is a blocked-movement locomotion response (with camera corner-snapping/character fading as the next environment-polish candidates after that), camera corner-snapping/character fading, stride warping/foot IK to remove the remaining capped run→walk slide, and authored turn-in-place clips. Final textures/models are intentionally deferred.
+Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation state machines/blend trees, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. Phase 2F covered short crossfades and turn-rate smoothing; Phase 2G added the third-person follow/orbit camera; Phase 2H made the camera continuously look at Erika and aligned her spawn facing with initial forward movement; Phase 2I added acceleration/deceleration movement response (speed envelope scaling the single authored root-motion authority); Phase 2J added stationary turn-in-place (a gated 45°-enter/15°-release procedural pivot that holds idle and zero translational target until the heading error is resolved, then releases through the existing speed envelope); Phase 2K synchronized the visible locomotion playback rate with the Phase 2I speed envelope through a separate pose clock, bounding the run→walk raw rate at 2×. Phase 2L added the first environment blockout (Viking longhouse in a forest clearing) as static vertex-colored geometry owned by a centralized portable layout. Phase 2M added the static camera-obstruction pass (32 oriented boxes, spherecast pull-in, smooth outward recovery) on the real environment geometry. Phase 2N added static flat-XZ player collision and wall sliding against the longhouse shell and tree trunks (29 blockers, bounded sweep-and-slide), constraining the authored root-motion displacement without a second movement authority. Phase 2O extended that set to the longhouse interior (solid hearth, benches, and tables; 34 blockers total) using the same architecture, and verified the interior stays navigable. Phase 2R added the material + lighting foundation (immutable `StaticMaterial`, eleven environment categories, cool exterior/warm interior `BasicEffect` lighting, emissive hearth bed). Phase 2S made environment texturing a real first-class path: deterministic planar UVs on every static primitive, a world-scale tiling convention (`TextureScale` = repeats per meter) with cached per-instance UV variants, a startup texture loader with wrap sampling on the existing `BasicEffect`, and a documented nine-slot texture-id mapping with a tested base-color fallback — built under a Path B asset audit (no legitimate environment textures exist yet), so the scene currently renders through the unchanged Phase 2R fallback and is ready for texture drop-in without layout or render redesign. With the environment collision set now covering the shell, trees, and furnishings, the most obvious remaining locomotion/collision defect is foot sliding while blocked, so the smallest logical next step is a blocked-movement locomotion response (with camera corner-snapping/character fading as the next environment-polish candidates after that), camera corner-snapping/character fading, stride warping/foot IK to remove the remaining capped run→walk slide, and authored turn-in-place clips. Final textures/models are intentionally deferred.
 
 ## Repository hygiene
 

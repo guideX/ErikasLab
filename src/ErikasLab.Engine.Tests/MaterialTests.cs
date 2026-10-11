@@ -30,7 +30,6 @@ public sealed class MaterialTests
         {
             Assert.True(material.IsValid, "environment material must hold finite, usable values");
             Assert.True(material.LightingEnabled, "the environment keeps lighting enabled");
-            Assert.False(material.TextureEnabled, "Phase 2R ships no environment textures");
         }
     }
 
@@ -199,10 +198,25 @@ public sealed class MaterialTests
     public void UntexturedMaterialsNeverRequestATextureBind()
     {
         var catalog = new TextureCatalog();
+
+        // Phase 2S: the ember bed stays an untextured emissive focal point and the
+        // canopy stays flat color; every other category carries a ready-to-fill
+        // texture slot that currently falls back to base color.
+        Assert.False(EnvironmentMaterials.HearthEmbers.TextureEnabled);
+        Assert.False(EnvironmentMaterials.TreeCanopy.TextureEnabled);
+        Assert.False(catalog.CanUseTexture(EnvironmentMaterials.HearthEmbers));
+        Assert.False(catalog.CanUseTexture(EnvironmentMaterials.TreeCanopy));
+
         foreach (var material in EnvironmentMaterials.All)
         {
-            Assert.False(material.TextureEnabled);
-            Assert.False(catalog.CanUseTexture(material));
+            if (material.Equals(EnvironmentMaterials.HearthEmbers) || material.Equals(EnvironmentMaterials.TreeCanopy))
+            {
+                continue;
+            }
+
+            Assert.True(material.TextureEnabled, "Phase 2S wires a texture slot into this category");
+            Assert.NotNull(material.TextureId);
+            Assert.False(catalog.CanUseTexture(material), "no environment textures are registered yet");
         }
 
         Assert.False(StaticMaterial.Default.TextureEnabled);

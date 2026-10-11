@@ -1,3 +1,4 @@
+using System.Numerics;
 using ErikasLab.Engine;
 
 namespace ErikasLab.Game;
@@ -11,12 +12,14 @@ namespace ErikasLab.Game;
 /// warm emissive ember bed — against a dark cool forest with a slightly more
 /// readable clearing.
 ///
-/// These are placeholder material treatments, not final art: no texture ids are
-/// set anywhere yet (the repository ships no environment textures), so every
-/// material renders through its base/emissive colors. Future wood/turf/stone/
-/// ground textures drop in by setting <see cref="StaticMaterial.TextureId"/>
-/// (plus UVs on the shared primitives) without touching layout, collision, or
-/// gameplay.
+/// These are placeholder material treatments, not final art. Phase 2S wires a
+/// ready-to-fill <see cref="StaticMaterial.TextureId"/> slot (plus a world
+/// <see cref="StaticMaterial.TextureScale"/>) into every category that has a
+/// plausible future texture; the repository ships no environment textures
+/// (Path B), so every slot currently falls back to the base/emissive colors.
+/// Dropping an asset at <c>Content/environment/{id}.png</c> connects it without
+/// touching layout, collision, or gameplay. The ember bed stays untextured
+/// emissive and the canopy stays flat color by design.
 /// </summary>
 public static class EnvironmentMaterials
 {
@@ -28,6 +31,8 @@ public static class EnvironmentMaterials
     public static StaticMaterial StructuralTimber { get; } = new()
     {
         BaseColor = new ColorRgba(56, 38, 24),
+        TextureId = EnvironmentTextureIds.StructuralTimber,
+        TextureScale = new Vector2(1f, 1f),
     };
 
     /// <summary>
@@ -38,6 +43,8 @@ public static class EnvironmentMaterials
     public static StaticMaterial WallPlanks { get; } = new()
     {
         BaseColor = new ColorRgba(88, 76, 60),
+        TextureId = EnvironmentTextureIds.WallPlanks,
+        TextureScale = new Vector2(1f, 1f),
     };
 
     /// <summary>
@@ -48,6 +55,8 @@ public static class EnvironmentMaterials
     public static StaticMaterial RoofTurf { get; } = new()
     {
         BaseColor = new ColorRgba(44, 48, 32),
+        TextureId = EnvironmentTextureIds.RoofTurf,
+        TextureScale = new Vector2(1f, 1f),
     };
 
     /// <summary>
@@ -57,6 +66,8 @@ public static class EnvironmentMaterials
     public static StaticMaterial InteriorFloor { get; } = new()
     {
         BaseColor = new ColorRgba(72, 50, 32),
+        TextureId = EnvironmentTextureIds.InteriorFloor,
+        TextureScale = new Vector2(1f, 1f),
     };
 
     /// <summary>
@@ -67,6 +78,8 @@ public static class EnvironmentMaterials
     public static StaticMaterial ClearingGround { get; } = new()
     {
         BaseColor = new ColorRgba(62, 74, 52),
+        TextureId = EnvironmentTextureIds.ClearingGround,
+        TextureScale = new Vector2(0.25f, 0.25f),
     };
 
     /// <summary>
@@ -76,18 +89,22 @@ public static class EnvironmentMaterials
     public static StaticMaterial ForestGround { get; } = new()
     {
         BaseColor = new ColorRgba(28, 34, 28),
+        TextureId = EnvironmentTextureIds.ForestGround,
+        TextureScale = new Vector2(0.25f, 0.25f),
     };
 
     /// <summary>Dark grey hearth-stone for the rim surrounding the ember bed.</summary>
     public static StaticMaterial HearthStone { get; } = new()
     {
         BaseColor = new ColorRgba(66, 64, 60),
+        TextureId = EnvironmentTextureIds.HearthStone,
+        TextureScale = new Vector2(1f, 1f),
     };
 
     /// <summary>
     /// The hearth focal point: a dark base with a restrained warm orange
     /// emissive so the ember bed glows under the cool scene lighting without
-    /// any light transport, particles, or flicker.
+    /// any light transport, particles, or flicker. Intentionally untextured.
     /// </summary>
     public static StaticMaterial HearthEmbers { get; } = new()
     {
@@ -102,12 +119,16 @@ public static class EnvironmentMaterials
     public static StaticMaterial Furniture { get; } = new()
     {
         BaseColor = new ColorRgba(98, 70, 42),
+        TextureId = EnvironmentTextureIds.Furniture,
+        TextureScale = new Vector2(1f, 1f),
     };
 
     /// <summary>Dark brown tree trunks.</summary>
     public static StaticMaterial TreeTrunk { get; } = new()
     {
         BaseColor = new ColorRgba(42, 32, 24),
+        TextureId = EnvironmentTextureIds.TreeTrunk,
+        TextureScale = new Vector2(1f, 1f),
     };
 
     /// <summary>Deep muted green canopy tiers — dark, never neon.</summary>
