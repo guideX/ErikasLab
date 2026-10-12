@@ -2,11 +2,13 @@ namespace ErikasLab.Game;
 
 /// <summary>
 /// Phase 2S centralized environment texture-id slots: the deterministic ids the
-/// environment materials reference, ready for asset drop-in. The repository
-/// ships no environment textures (Path B), so every id currently resolves to
-/// nothing and the renderer falls back to the Phase 2R base colors.
+/// environment materials reference. Phase 2T connects real art for six of the
+/// nine slots via runtime PNGs under <c>Content/environment/</c> (see
+/// <c>textures/</c> for the committed sources); clearing ground, forest ground,
+/// and tree bark ship no suitable asset yet and keep rendering through the
+/// Phase 2R base colors.
 ///
-/// To connect real art: drop the asset at
+/// To replace an asset later: overwrite the PNG at
 /// <c>Content/environment/{file-name}.png</c> — the MonoGame host loads every
 /// <c>*.png</c> under <c>Content/environment/</c> once at startup and registers
 /// each file under <c>environment/{file-name without extension}</c>, matching

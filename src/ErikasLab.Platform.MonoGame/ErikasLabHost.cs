@@ -30,14 +30,14 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
 
         Content.RootDirectory = "Content";
         IsMouseVisible = false;
-        Window.Title = "Erika's Lab - Phase 2S";
+        Window.Title = "Erika's Lab - Phase 2T";
         Window.AllowUserResizing = true;
         Window.ClientSizeChanged += OnClientSizeChanged;
     }
 
     protected override void Initialize()
     {
-        Console.WriteLine("Erika's Lab | Phase 2S | initializing");
+        Console.WriteLine("Erika's Lab | Phase 2T | initializing");
         Console.WriteLine($"Runtime: {RuntimeInformation.FrameworkDescription} ({RuntimeInformation.ProcessArchitecture})");
         base.Initialize();
     }
@@ -112,7 +112,8 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
     }
 
     /// <summary>
-    /// Phase 2S environment-texture drop-in path. Loads every
+    /// Phase 2S environment-texture drop-in path, filled with real Phase 2T
+    /// art for six of the nine slots. Loads every
     /// <c>*.png</c> under <c>Content/environment/</c> once at startup and
     /// registers each file under <c>environment/{file name without
     /// extension}</c>, matching <see cref="EnvironmentTextureIds"/>. A
@@ -130,6 +131,19 @@ internal sealed class ErikasLabHost : Microsoft.Xna.Framework.Game
         }
 
         var directory = Path.Combine(Content.RootDirectory, "environment");
+        if (!Directory.Exists(directory))
+        {
+            // `dotnet run` launches with the repository (not the output) as the
+            // working directory, while the staged executable runs beside its
+            // own Content tree: probe the executable-adjacent tree before
+            // giving up, so both launch styles find the same assets.
+            var adjacent = Path.Combine(AppContext.BaseDirectory, "Content", "environment");
+            if (Directory.Exists(adjacent))
+            {
+                directory = adjacent;
+            }
+        }
+
         if (!Directory.Exists(directory))
         {
             Console.WriteLine(

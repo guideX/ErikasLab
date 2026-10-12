@@ -27,6 +27,13 @@
   </ItemGroup>
   <ItemGroup>
     <MonoGameContentReference Include="Content\Content.mgcb" />
+    <!-- Phase 2T real environment textures: loose PNGs the host loads once at
+         startup via Texture2D.FromStream (never through MGCB). Copied beside
+         the staged Content tree so both exe and `dotnet run` launches resolve
+         Content/environment/{id}.png matching EnvironmentTextureIds. -->
+    <Content Include="Content\environment\*.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <!--

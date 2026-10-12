@@ -15,10 +15,11 @@ namespace ErikasLab.Game;
 /// These are placeholder material treatments, not final art. Phase 2S wires a
 /// ready-to-fill <see cref="StaticMaterial.TextureId"/> slot (plus a world
 /// <see cref="StaticMaterial.TextureScale"/>) into every category that has a
-/// plausible future texture; the repository ships no environment textures
-/// (Path B), so every slot currently falls back to the base/emissive colors.
-/// Dropping an asset at <c>Content/environment/{id}.png</c> connects it without
-/// touching layout, collision, or gameplay. The ember bed stays untextured
+/// plausible future texture. Phase 2T fills six slots with real art (wall
+/// planks, structural timber, roof thatch, hearth stone, interior floor,
+/// furniture wood; see <see cref="EnvironmentTextureIds"/>); clearing ground,
+/// forest ground, and tree bark keep no asset and fall back to the
+/// base/emissive colors below. The ember bed stays untextured
 /// emissive and the canopy stays flat color by design.
 /// </summary>
 public static class EnvironmentMaterials

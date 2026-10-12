@@ -255,7 +255,7 @@ internal sealed class MonoGameRenderer : IRenderer
             .Select(vertex => new VertexPositionNormalTexture(
                 ToMonoGameVector(vertex.Position),
                 ToMonoGameVector(vertex.Normal),
-                Microsoft.Xna.Framework.Vector2.Zero))
+                new Microsoft.Xna.Framework.Vector2(vertex.TexCoord.X, vertex.TexCoord.Y)))
             .ToArray();
         var indices = mesh.Indices.ToArray();
 

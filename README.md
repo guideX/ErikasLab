@@ -763,6 +763,92 @@ surface is still flat color until real wood/turf/stone/ground textures drop
 into `Content/environment/`. The flat emissive ember bed (no fire geometry)
 and the blockout trees also remain.
 
+## Longhouse environment textures (Phase 2T)
+
+Six of the nine Phase 2S texture slots are now filled with real, repository-
+committed art. No texture infrastructure was redesigned: this phase is asset
+placement, slot mapping, and visual tuning on the existing pipeline.
+
+- Asset audit result: the `textures/` directory (committed by the repository
+  owner the morning of this phase: five `Texturelabs_*` wood/stone photos,
+  two thatch photos) holds legitimate environment art, so the real-asset gate
+  passes. Provenance/license is not documented in the repository (filenames
+  suggest Texturelabs-sourced wood/stone; the thatch sources are unknown), and
+  no new art was downloaded, generated, or fabricated for this phase.
+- Integrated mapping (runtime PNG under `Content/environment/`, resized once
+  with high-quality bicubic from the `textures/` source; rotation noted):
+  - `wall_planks.png` (1024x683) <- `Texturelabs_Wood_161XL.jpg`: vertical
+    weathered planks on all wall segments and gables, 1 repeat/m (~8
+    boards/m, ~12-15 cm planks beside Erika).
+  - `structural_timber.png` (1024x773) <- `Texturelabs_Wood_261S.jpg`: dark
+    mottled wood on posts, beams, rafters, ridge, and door frame, 1
+    repeat/m; stays darker/heavier than the walls via the Phase 2R tint.
+  - `roof_turf.png` (512x512) <- `thatched-roofs-textures-cover.jpg`,
+    rotated 90 degrees so the stems run along U (down-slope on the pitched
+    slabs), 1 repeat/m; the dark mossy Phase 2R tint keeps the roof
+    darker/heavier than the walls with no neon green.
+  - `hearth_stone.png` (1024x683) <- `Texturelabs_Stone_121XL.jpg`: layered
+    grey rock on the hearth rim only, 1 repeat/m; the ember bed stays
+    untextured emissive and dominant.
+  - `interior_floor.png` (1024x683) <- `Texturelabs_Wood_266XL.jpg`: light
+    plywood grain, 1 repeat/m; warm interior identity preserved.
+  - `furniture_wood.png` (512x342) <- same plywood source (own file, own
+    slot), 1 repeat/m; tint separates benches/tables from floor and walls.
+- Deliberately NOT used (quality beats coverage): `Texturelabs_Wood_152XL`
+  (log end-grain, wrong for every surface), `Texturelabs_Stone_159XL` (near-
+  white concrete), `Texturelabs_Stone_167XL` (blue/white marble),
+  `Texturelabs_Stone_168XL` (pebbles at the wrong scale for the 0.28 m rim),
+  `0009-thatched-roof-texture-seamless.jpg` (visible stock watermark across
+  the center), and no ground/bark asset exists — so clearing ground, forest
+  ground, and tree trunks keep their Phase 2R fallback colors, and the
+  clearing/forest distinction is unchanged. Canopy stays flat color by design.
+- Real defects exposed by real art (fixed, not redesigned):
+  - The renderer computed world-repeat UV variants correctly but uploaded
+    `Vector2.Zero` for every GPU vertex, so any bound texture sampled a
+    single texel. `GetOrCreateMesh` now uploads the variant `TexCoord`.
+    Without this fix no texture could ever render.
+  - The host only probed `Content/environment` relative to the working
+    directory, so `dotnet run` (repository root) never found the staged
+    assets; it now falls back to the executable-adjacent `Content`
+    tree. The `*.png` contract is unchanged.
+  - Runtime PNGs ship in source under `Content/environment/` and stage to
+    the output via a `PreserveNewest` content rule (no MGCB involvement, no
+    per-frame I/O, load-once cache/dispose unchanged).
+- Tint/lighting policy: every textured material keeps its exact Phase 2R
+  `BaseColor` as the diffuse tint (asserted by tests) and the lighting policy
+  is byte-identical (ambient `(0.20, 0.23, 0.28)`, key `(0.62, 0.70, 0.82)`
+  from `(-0.45, -1, -0.35)`, fill `(0.10, 0.11, 0.14)`), because screenshots
+  showed material distinction, timber heaviness, and hearth dominance all
+  survive. All texture scales are 1 repeat/m.
+- Fallback preserved: a missing/unreadable PNG logs once and its material
+  renders the Phase 2R color; startup reports `6 loaded, 0 failed` with
+  `52 binds / 26 fallbacks` (the 26 are exactly clearing + forest + 24
+  trunks). Tests cover empty-catalog fallback for every textured material.
+- Runtime validation: real-host launch + screen capture (spawn exterior,
+  front wall + doorway close-up, orbited long-wall view, doorway-interior
+  toward hearth, high roof-space view). Walls read as deliberate vertical
+  plank construction with consistent scale across segments; timber reads
+  darker/heavier; roof slopes show down-slope thatch and stay darker than
+  the walls; floor shows warm grain; the ember glow stays visible through
+  the doorway from spawn and dominates the interior. Erika stays readable
+  throughout. No UV orientation defect was found (walls/roof/gables share
+  one vertical convention as designed).
+- Observed (pre-existing, out of scope): faint horizontal streaking on the
+  ground at extreme grazing angles (clearing/forest plane overlap
+  z-fighting); geometry, collision, and layout are untouched in 2T.
+- Regression guards: all 652 prior tests pass unchanged (660 total with 8
+  new asset/mapping/fallback/lighting tests); player collision (34), camera
+  obstruction (32), layout, spawn, traversal, and camera behavior unchanged.
+
+Still placeholder after 2T: clearing/forest ground texture (no grass/earth
+asset), tree bark (no bark asset), the flat emissive ember bed (no fire
+geometry/particles), and blockout canopy tiers. What looks most obviously
+placeholder now: the flat sage-green ground planes against the textured
+longhouse. To replace an asset later, overwrite the PNG in
+`Content/environment/` (same file name preserves the slot); to texture a
+remaining fallback category, drop a PNG named after its
+`EnvironmentTextureIds` entry — no code change needed.
+
 ## Deferred work
 
 Combat, inventory, AI, quests, complicated physics, networking, guideXOS support, animation state machines/blend trees, production content, save/load, and a larger renderer/content system are intentionally deferred. Canonical Erika now walks/runs via consumed root motion from the ignored local `erika/` source directory (see above); the remaining 34 FBX files await future phases. Phase 2F covered short crossfades and turn-rate smoothing; Phase 2G added the third-person follow/orbit camera; Phase 2H made the camera continuously look at Erika and aligned her spawn facing with initial forward movement; Phase 2I added acceleration/deceleration movement response (speed envelope scaling the single authored root-motion authority); Phase 2J added stationary turn-in-place (a gated 45°-enter/15°-release procedural pivot that holds idle and zero translational target until the heading error is resolved, then releases through the existing speed envelope); Phase 2K synchronized the visible locomotion playback rate with the Phase 2I speed envelope through a separate pose clock, bounding the run→walk raw rate at 2×. Phase 2L added the first environment blockout (Viking longhouse in a forest clearing) as static vertex-colored geometry owned by a centralized portable layout. Phase 2M added the static camera-obstruction pass (32 oriented boxes, spherecast pull-in, smooth outward recovery) on the real environment geometry. Phase 2N added static flat-XZ player collision and wall sliding against the longhouse shell and tree trunks (29 blockers, bounded sweep-and-slide), constraining the authored root-motion displacement without a second movement authority. Phase 2O extended that set to the longhouse interior (solid hearth, benches, and tables; 34 blockers total) using the same architecture, and verified the interior stays navigable. Phase 2R added the material + lighting foundation (immutable `StaticMaterial`, eleven environment categories, cool exterior/warm interior `BasicEffect` lighting, emissive hearth bed). Phase 2S made environment texturing a real first-class path: deterministic planar UVs on every static primitive, a world-scale tiling convention (`TextureScale` = repeats per meter) with cached per-instance UV variants, a startup texture loader with wrap sampling on the existing `BasicEffect`, and a documented nine-slot texture-id mapping with a tested base-color fallback — built under a Path B asset audit (no legitimate environment textures exist yet), so the scene currently renders through the unchanged Phase 2R fallback and is ready for texture drop-in without layout or render redesign. With the environment collision set now covering the shell, trees, and furnishings, the most obvious remaining locomotion/collision defect is foot sliding while blocked, so the smallest logical next step is a blocked-movement locomotion response (with camera corner-snapping/character fading as the next environment-polish candidates after that), camera corner-snapping/character fading, stride warping/foot IK to remove the remaining capped run→walk slide, and authored turn-in-place clips. Final textures/models are intentionally deferred.
